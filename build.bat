@@ -12,23 +12,25 @@ REM Check for Visual Studio compiler
 where cl >nul 2>nul
 if %ERRORLEVEL% EQU 0 (
     echo Using MSVC compiler...
-    cl /O2 /W3 /TC main.c /Fe:wtsc.exe /link user32.lib
-) else (
-    REM Check for MinGW
-    where gcc >nul 2>nul
-    if %ERRORLEVEL% EQU 0 (
-        echo Using MinGW compiler...
-        gcc -O2 -Wall -std=c99 main.c -o wtsc.exe
+    echo Compiling resource file...
+    rc resource.rc
+    if %ERRORLEVEL% EQU 0 (        echo Compiling and linking with icon...
+        cl /O2 /W3 /TC main.c /Fe:wtsc.exe /link resource.res user32.lib
     ) else (
-        echo Error: No compiler found!
-        echo Please install Visual Studio Build Tools or MinGW
-        exit /b 1
+        echo Warning: Resource compilation failed, building without icon...
+        cl /O2 /W3 /TC main.c /Fe:wtsc.exe /link user32.lib
     )
+) else (
+    echo Error: Visual Studio compiler not found!
+    echo Please install Visual Studio Build Tools
+    exit /b 1
 )
 
 if %ERRORLEVEL% EQU 0 (
     echo Build successful!
     echo Run wtsc.exe to start the spreadsheet
+    REM Clean up temporary resource files
+    if exist resource.res del resource.res >nul 2>nul
 ) else (
     echo Build failed!
     exit /b 1
