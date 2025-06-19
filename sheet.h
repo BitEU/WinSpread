@@ -428,6 +428,7 @@ double func_min(const double* values, int count);
 double func_median(double* values, int count);
 double func_mode(const double* values, int count);
 double func_if(double condition, double true_val, double false_val);
+double func_power(double base, double exponent);
 
 // Parse range notation like "A1:A3" or "B2:D5"
 int parse_range(const char* range_str, CellRange* range) {
@@ -585,6 +586,10 @@ double func_mode(const double* values, int count) {
 
 double func_if(double condition, double true_val, double false_val) {
     return (condition != 0.0) ? true_val : false_val;
+}
+
+double func_power(double base, double exponent) {
+    return pow(base, exponent);
 }
 
 // Skip whitespace in expression
