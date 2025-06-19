@@ -87,6 +87,10 @@ void sheet_copy_cell(Sheet* sheet, int src_row, int src_col, int dest_row, int d
 Cell* sheet_get_clipboard_cell(void);
 void sheet_set_clipboard_cell(Cell* cell);
 
+// CSV operations
+int sheet_save_csv(Sheet* sheet, const char* filename, int preserve_formulas);
+int sheet_load_csv(Sheet* sheet, const char* filename, int preserve_formulas);
+
 // Cell operations
 Cell* cell_new(int row, int col);
 void cell_free(Cell* cell);
@@ -1373,6 +1377,247 @@ void sheet_recalculate(Sheet* sheet) {
     }
     
     sheet->needs_recalc = 0;
+}
+
+// Escape a string for CSV output (handle quotes and commas)
+char* escape_csv_string(const char* str) {
+    if (!str) return NULL;
+    
+    // Check if we need to escape (contains comma, quote, or newline)
+    int needs_escape = 0;
+    int quote_count = 0;
+    
+    for (const char* p = str; *p; p++) {
+        if (*p == ',' || *p == '\n' || *p == '\r') {
+            needs_escape = 1;
+        }
+        if (*p == '"') {
+            needs_escape = 1;
+            quote_count++;
+        }
+    }
+    
+    if (!needs_escape) {
+        // Return a copy of the original string
+        char* result = malloc(strlen(str) + 1);
+        if (result) {
+            strcpy_s(result, strlen(str) + 1, str);
+        }
+        return result;
+    }
+    
+    // Need to escape - allocate buffer (original + 2 for outer quotes + quotes to double)
+    char* result = malloc(strlen(str) + 2 + quote_count + 1);
+    if (!result) return NULL;
+    
+    char* p = result;
+    *p++ = '"';  // Opening quote
+    
+    for (const char* s = str; *s; s++) {
+        if (*s == '"') {
+            *p++ = '"';  // Double the quote
+            *p++ = '"';
+        } else {
+            *p++ = *s;
+        }
+    }
+    
+    *p++ = '"';  // Closing quote
+    *p = '\0';
+    
+    return result;
+}
+
+// Parse a CSV field (handles quoted fields with commas and quotes)
+char* parse_csv_field(const char** csv_line, int* is_end) {
+    const char* start = *csv_line;
+    const char* p = start;
+    
+    *is_end = 0;
+    
+    // Skip leading whitespace
+    while (*p == ' ' || *p == '\t') p++;
+    
+    if (*p == '\0' || *p == '\n' || *p == '\r') {
+        *is_end = 1;
+        *csv_line = p;
+        return NULL;  // Empty field at end of line
+    }
+    
+    if (*p == '"') {
+        // Quoted field
+        p++;  // Skip opening quote
+        char* result = malloc(1000);  // Reasonable buffer size
+        if (!result) return NULL;
+        
+        char* dest = result;
+        
+        while (*p && *p != '\n' && *p != '\r') {
+            if (*p == '"') {
+                if (*(p + 1) == '"') {
+                    // Escaped quote
+                    *dest++ = '"';
+                    p += 2;
+                } else {
+                    // End of quoted field
+                    p++;
+                    break;
+                }
+            } else {
+                *dest++ = *p++;
+            }
+        }
+        
+        *dest = '\0';
+        
+        // Skip to next comma or end of line
+        while (*p && *p != ',' && *p != '\n' && *p != '\r') p++;
+        if (*p == ',') p++;
+        else *is_end = 1;
+        
+        *csv_line = p;
+        return result;
+    } else {
+        // Unquoted field
+        const char* field_start = p;
+        while (*p && *p != ',' && *p != '\n' && *p != '\r') p++;
+        
+        int len = (int)(p - field_start);
+        char* result = malloc(len + 1);
+        if (!result) return NULL;
+        
+        strncpy_s(result, len + 1, field_start, len);
+        result[len] = '\0';
+        
+        // Trim trailing whitespace
+        while (len > 0 && (result[len-1] == ' ' || result[len-1] == '\t')) {
+            result[--len] = '\0';
+        }
+        
+        if (*p == ',') p++;
+        else *is_end = 1;
+        
+        *csv_line = p;
+        return result;
+    }
+}
+
+// Save sheet to CSV file
+int sheet_save_csv(Sheet* sheet, const char* filename, int preserve_formulas) {
+    FILE* file;
+    if (fopen_s(&file, filename, "w") != 0) {
+        return 0;  // Failed to open file
+    }
+    
+    // Find the actual used range
+    int max_row = 0, max_col = 0;
+    for (int row = 0; row < sheet->rows; row++) {
+        for (int col = 0; col < sheet->cols; col++) {
+            Cell* cell = sheet_get_cell(sheet, row, col);
+            if (cell && cell->type != CELL_EMPTY) {
+                if (row > max_row) max_row = row;
+                if (col > max_col) max_col = col;
+            }
+        }
+    }
+    
+    // Write data
+    for (int row = 0; row <= max_row; row++) {
+        for (int col = 0; col <= max_col; col++) {
+            Cell* cell = sheet_get_cell(sheet, row, col);
+            
+            if (col > 0) {
+                fprintf(file, ",");
+            }
+            
+            if (cell && cell->type != CELL_EMPTY) {
+                if (preserve_formulas && cell->type == CELL_FORMULA) {
+                    // Save the formula expression
+                    char* escaped = escape_csv_string(cell->data.formula.expression);
+                    if (escaped) {
+                        fprintf(file, "%s", escaped);
+                        free(escaped);
+                    }
+                } else {
+                    // Save the display value
+                    char* display_value = sheet_get_display_value(sheet, row, col);
+                    if (display_value && strlen(display_value) > 0) {
+                        char* escaped = escape_csv_string(display_value);
+                        if (escaped) {
+                            fprintf(file, "%s", escaped);
+                            free(escaped);
+                        }
+                    }
+                }
+            }
+        }
+        fprintf(file, "\n");
+    }
+    
+    fclose(file);
+    return 1;  // Success
+}
+
+// Load sheet from CSV file
+int sheet_load_csv(Sheet* sheet, const char* filename, int preserve_formulas) {
+    FILE* file;
+    if (fopen_s(&file, filename, "r") != 0) {
+        return 0;  // Failed to open file
+    }
+    
+    // Clear existing data
+    for (int row = 0; row < sheet->rows; row++) {
+        for (int col = 0; col < sheet->cols; col++) {
+            sheet_clear_cell(sheet, row, col);
+        }
+    }
+    
+    char line[4096];  // Buffer for reading lines
+    int row = 0;
+    
+    while (fgets(line, sizeof(line), file) && row < sheet->rows) {
+        const char* line_ptr = line;
+        int col = 0;
+        int is_end = 0;
+        
+        while (!is_end && col < sheet->cols) {
+            char* field = parse_csv_field(&line_ptr, &is_end);
+            
+            if (field && strlen(field) > 0) {
+                // Determine what type of data this is
+                if (preserve_formulas && field[0] == '=') {
+                    // It's a formula
+                    sheet_set_formula(sheet, row, col, field);
+                } else {
+                    // Check if it's a number
+                    char* endptr;
+                    double num_value = strtod(field, &endptr);
+                    
+                    if (*endptr == '\0' || (*endptr == '\0' && endptr != field)) {
+                        // It's a valid number
+                        sheet_set_number(sheet, row, col, num_value);
+                    } else {
+                        // It's a string
+                        sheet_set_string(sheet, row, col, field);
+                    }
+                }
+                free(field);
+            }
+            
+            col++;
+        }
+        
+        row++;
+    }
+    
+    fclose(file);
+    
+    // Recalculate if we loaded formulas
+    if (preserve_formulas) {
+        sheet_recalculate(sheet);
+    }
+    
+    return 1;  // Success
 }
 
 // Demo: Create a simple spreadsheet with some data

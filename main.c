@@ -139,6 +139,9 @@ void app_init(AppState* state) {
     sheet_set_string(state->sheet, 12, 0, "IF(condition, true_val, false_val)");
     sheet_set_string(state->sheet, 13, 0, "POWER(base, exponent)");
     sheet_set_string(state->sheet, 14, 0, "Operators: +, -, *, /, >, <, >=, <=, =, <>");
+    sheet_set_string(state->sheet, 15, 0, "CSV Commands:");
+    sheet_set_string(state->sheet, 16, 0, "savecsv <filename> - Save to CSV");
+    sheet_set_string(state->sheet, 17, 0, "loadcsv <filename> - Load from CSV");
     
     debug_log("app_init completed successfully");
 }
@@ -298,8 +301,7 @@ void app_render(AppState* state) {
     }
     
     debug_log("Cell reference: %s", cellRef);
-    
-    if (state->mode == MODE_NORMAL) {
+      if (state->mode == MODE_NORMAL) {
         if (currentCell && currentCell->type == CELL_FORMULA) {
             sprintf_s(status, sizeof(status), "[%s] %s: %s | %s", 
                     state->sheet->name, cellRef, 
@@ -309,6 +311,10 @@ void app_render(AppState* state) {
             sprintf_s(status, sizeof(status), "[%s] %s | %s", 
                     state->sheet->name, cellRef, state->status_message);
         }
+    } else if (state->mode == MODE_COMMAND && strlen(state->input_buffer) == 0 && strlen(state->status_message) > 0) {
+        // Special case: if we're in command mode but input buffer is empty and we have a status message,
+        // show the status message (this handles prompts like the CSV save/load preference)
+        sprintf_s(status, sizeof(status), "%s", state->status_message);
     } else {
         // Show input buffer with cursor
         char input_with_cursor[300];
@@ -324,7 +330,7 @@ void app_render(AppState* state) {
         
         sprintf_s(status, sizeof(status), "[%s] %s > %s", 
                 state->sheet->name, cellRef, input_with_cursor);
-    }    
+    }
     console_write_string(con, 0, status_y + 1, status, headerColor);
     
     debug_log("Calling console_flip");
@@ -410,6 +416,68 @@ void app_cancel_input(AppState* state) {
     strcpy_s(state->status_message, sizeof(state->status_message), "Cancelled");
 }
 
+// Ask user for CSV save/load preference
+int ask_preserve_formulas(AppState* state, const char* operation) {
+    // Store current state to restore later
+    AppMode old_mode = state->mode;
+    char old_status[256];
+    strcpy_s(old_status, sizeof(old_status), state->status_message);
+    
+    // Temporarily switch to command mode to get user input
+    state->mode = MODE_COMMAND;
+    
+    // Set up prompt with clear instructions
+    sprintf_s(state->status_message, sizeof(state->status_message), 
+              "%s: Type 'f' to flatten (save calculated values) or 'p' to preserve (save formulas as text): ", operation);
+    
+    // Clear input buffer and set proper input state
+    state->input_buffer[0] = '\0';
+    state->input_pos = 0;
+    state->cursor_blink_rate = 300;  // Faster blink during input
+    state->cursor_visible = TRUE;
+    state->cursor_blink_time = GetTickCount();
+    
+    // Render to show the prompt
+    app_render(state);
+    
+    // Get user input
+    KeyEvent key;
+    int result = -1;
+    while (state->running) {
+        if (console_get_key(state->console, &key)) {
+            if (key.type == 1 && key.key.special == VK_ESCAPE) {
+                strcpy_s(state->status_message, sizeof(state->status_message), "Cancelled");
+                result = -1;  // Cancelled
+                break;
+            } else if (key.type == 0) {
+                if (key.key.ch == 'f' || key.key.ch == 'F') {
+                    result = 0;  // Flatten
+                    break;
+                } else if (key.key.ch == 'p' || key.key.ch == 'P') {
+                    result = 1;  // Preserve
+                    break;
+                }
+            }
+        }
+        Sleep(10);  // Small delay to prevent high CPU usage
+    }
+    
+    // Properly restore all input state
+    state->mode = old_mode;
+    state->input_buffer[0] = '\0';
+    state->input_pos = 0;
+    state->cursor_blink_rate = 500;  // Normal blink rate
+    state->cursor_visible = TRUE;
+    state->cursor_blink_time = GetTickCount();
+    
+    // Restore status message if not cancelled
+    if (result != -1) {
+        strcpy_s(state->status_message, sizeof(state->status_message), old_status);
+    }
+    
+    return result;
+}
+
 // Execute command
 void app_execute_command(AppState* state, const char* command) {
     if (strcmp(command, "q") == 0 || strcmp(command, "quit") == 0) {
@@ -419,6 +487,42 @@ void app_execute_command(AppState* state, const char* command) {
     } else if (strcmp(command, "wq") == 0) {
         strcpy_s(state->status_message, sizeof(state->status_message), "Save not implemented yet");
         state->running = FALSE;
+    } else if (strncmp(command, "savecsv ", 8) == 0) {
+        // Save to CSV
+        const char* filename = command + 8;
+        if (strlen(filename) == 0) {
+            strcpy_s(state->status_message, sizeof(state->status_message), "Usage: savecsv <filename>");
+            return;
+        }
+        
+        int preserve = ask_preserve_formulas(state, "Save CSV");
+        if (preserve == -1) return;  // Cancelled
+        
+        if (sheet_save_csv(state->sheet, filename, preserve)) {
+            sprintf_s(state->status_message, sizeof(state->status_message), 
+                     "Saved to %s (%s)", filename, preserve ? "formulas preserved" : "values flattened");
+        } else {
+            sprintf_s(state->status_message, sizeof(state->status_message), 
+                     "Failed to save %s", filename);
+        }
+    } else if (strncmp(command, "loadcsv ", 8) == 0) {
+        // Load from CSV
+        const char* filename = command + 8;
+        if (strlen(filename) == 0) {
+            strcpy_s(state->status_message, sizeof(state->status_message), "Usage: loadcsv <filename>");
+            return;
+        }
+        
+        int preserve = ask_preserve_formulas(state, "Load CSV");
+        if (preserve == -1) return;  // Cancelled
+        
+        if (sheet_load_csv(state->sheet, filename, preserve)) {
+            sprintf_s(state->status_message, sizeof(state->status_message), 
+                     "Loaded from %s (%s)", filename, preserve ? "formulas preserved" : "values only");
+        } else {
+            sprintf_s(state->status_message, sizeof(state->status_message), 
+                     "Failed to load %s", filename);
+        }
     } else {
         sprintf_s(state->status_message, sizeof(state->status_message), "Unknown command: %s", command);
     }

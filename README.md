@@ -6,6 +6,46 @@ A powerful, vi-style spreadsheet application that runs entirely in the Windows t
 ![Platform](https://img.shields.io/badge/platform-Windows-blue.svg)
 ![Language](https://img.shields.io/badge/language-C-orange.svg)
 
+## Table of Contents
+
+- [Features](#features)
+  - [Core Functionality](#core-functionality)
+  - [Supported Functions](#supported-functions)
+  - [Advanced Features](#advanced-features)
+- [Installation](#installation)
+  - [Prerequisites](#prerequisites)
+  - [Building from Source](#building-from-source)
+- [Usage](#usage)
+  - [Basic Navigation](#basic-navigation)
+  - [Data Entry](#data-entry)
+  - [Cell Operations](#cell-operations)
+  - [Command Mode](#command-mode)
+- [CSV File Operations](#csv-file-operations)
+  - [Saving to CSV](#saving-to-csv)
+  - [Loading from CSV](#loading-from-csv)
+  - [CSV Format Options](#csv-format-options)
+- [Functions](#functions)
+  - [1. SUM Function](#1-sum-function)
+  - [2. AVG Function](#2-avg-function)
+  - [3. MAX Function](#3-max-function)
+  - [4. MIN Function](#4-min-function)
+  - [5. MEDIAN Function](#5-median-function)
+  - [6. MODE Function](#6-mode-function)
+  - [7. IF Function](#7-if-function)
+  - [8. POWER Function](#8-power-function)
+  - [Mathematical Operators](#mathematical-operators)
+  - [Range Notation](#range-notation)
+- [File Structure](#file-structure)
+- [Architecture](#architecture)
+  - [Core Components](#core-components)
+  - [Key Features](#key-features)
+- [Error Handling](#error-handling)
+- [Future Enhancements](#future-enhancements)
+- [Contributing](#contributing)
+  - [Development Setup](#development-setup)
+- [License](#license)
+- [Acknowledgments](#acknowledgments)
+
 ## Features
 
 ### Core Functionality
@@ -40,7 +80,7 @@ A powerful, vi-style spreadsheet application that runs entirely in the Windows t
 
 1. **Clone the repository:**
    ```cmd
-   git clone https://github.com/yourusername/WinSpread.git
+   git clone https://github.com/BitEU/WinSpread.git
    cd WinSpread
    ```
 
@@ -84,6 +124,83 @@ A powerful, vi-style spreadsheet application that runs entirely in the Windows t
 - **`:q`** or **`:quit`** - Quit application
 - **`:w`** - Save (not yet implemented)
 - **`:wq`** - Save and quit
+
+## CSV File Operations
+
+WinSpread provides comprehensive CSV (Comma-Separated Values) file support, allowing you to import data from external sources and export your spreadsheet calculations for use in other applications.
+
+### Saving to CSV
+
+To save your current spreadsheet to a CSV file, use the `savecsv` command in command mode:
+
+**Syntax:** `:savecsv <filename>`
+
+**Examples:**
+- `:savecsv data.csv` - Save to data.csv in the current directory
+- `:savecsv C:\Documents\report.csv` - Save with full path
+- `:savecsv budget_2024.csv` - Save with descriptive filename
+
+When saving to CSV, you'll be prompted to choose between two formats:
+
+#### CSV Format Options
+
+**Flatten Mode (`f`)**: Save calculated values
+- Formulas are evaluated and their results are saved
+- Best for sharing data with other applications
+- Preserves the visual output of your spreadsheet
+- Example: A cell containing `=SUM(A1:A5)` saves as `150` (the calculated result)
+
+**Preserve Mode (`p`)**: Save formulas as text
+- Formulas are saved as text strings with their original expressions
+- Best for backing up your work or sharing with other WinSpread users
+- Maintains the logic and structure of your spreadsheet
+- Example: A cell containing `=SUM(A1:A5)` saves as `"=SUM(A1:A5)"`
+
+### Loading from CSV
+
+To load data from a CSV file into your current spreadsheet, use the `loadcsv` command:
+
+**Syntax:** `:loadcsv <filename>`
+
+**Examples:**
+- `:loadcsv data.csv` - Load from data.csv in the current directory
+- `:loadcsv C:\Documents\import.csv` - Load with full path
+- `:loadcsv sales_data.csv` - Load sales data
+
+**Important Notes:**
+- Loading CSV data will overwrite existing cells in the affected range
+- The data will be loaded starting from cell A1
+- Text fields containing formulas (from preserve mode) will be interpreted as formulas
+- Numeric data will be automatically recognized and converted
+- Empty cells in the CSV will clear corresponding spreadsheet cells
+
+### CSV Format Compatibility
+
+WinSpread's CSV implementation follows standard CSV formatting rules:
+
+**Supported Features:**
+- Comma-separated values
+- Quoted text fields containing commas
+- Escaped quotes within quoted fields (`""` becomes `"`)
+- Mixed data types (numbers, text, formulas)
+- Empty fields and rows
+- Windows and Unix line endings
+
+**Example CSV Format:**
+```csv
+Name,Age,Salary,Department
+"Smith, John",35,50000,Engineering
+"Doe, Jane",28,45000,"Human Resources"
+Bob,42,55000,Sales
+Alice,31,,Marketing
+```
+
+This CSV would load as:
+- A1: `Name`, B1: `Age`, C1: `Salary`, D1: `Department`
+- A2: `Smith, John`, B2: `35`, C2: `50000`, D2: `Engineering`
+- A3: `Doe, Jane`, B3: `28`, C3: `45000`, D3: `Human Resources`
+- A4: `Bob`, B4: `42`, C4: `55000`, D4: `Sales`
+- A5: `Alice`, B5: `31`, C5: (empty), D5: `Marketing`
 
 ## Functions
 
@@ -261,8 +378,6 @@ WinSpread provides comprehensive error handling:
 
 ## Future Enhancements
 
-- [ ] Save/Load functionality (CSV, Excel formats)
-- [ ] System clipboard integration
 - [ ] Undo/Redo support
 - [ ] Cell formatting (colors, borders)
 - [ ] Additional mathematical functions
