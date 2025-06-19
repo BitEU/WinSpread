@@ -405,7 +405,8 @@ int parse_cell_reference(const char* ref, int* row, int* col) {
 }
 
 // Forward declarations for expression parsing
-double parse_arithmetic_expression(Sheet* sheet, const char* expr, ErrorType* error);
+double parse_arithmetic_expression(Sheet* sheet, const char** expr, ErrorType* error);
+double parse_arithmetic_expression_old(Sheet* sheet, const char* expr, ErrorType* error);
 double parse_term(Sheet* sheet, const char** expr, ErrorType* error);
 double parse_factor(Sheet* sheet, const char** expr, ErrorType* error);
 double parse_function(Sheet* sheet, const char** expr, ErrorType* error);
@@ -599,6 +600,83 @@ void skip_whitespace(const char** expr) {
     }
 }
 
+// Clipboard functionality
+static Cell* clipboard_cell = NULL;
+
+Cell* sheet_get_clipboard_cell(void) {
+    return clipboard_cell;
+}
+
+void sheet_set_clipboard_cell(Cell* cell) {
+    // Free existing clipboard cell
+    if (clipboard_cell) {
+        cell_free(clipboard_cell);
+    }
+    
+    // Create a copy of the cell
+    if (cell) {
+        clipboard_cell = cell_new(cell->row, cell->col);
+        switch (cell->type) {
+            case CELL_NUMBER:
+                cell_set_number(clipboard_cell, cell->data.number);
+                break;
+            case CELL_STRING:
+                cell_set_string(clipboard_cell, cell->data.string);
+                break;
+            case CELL_FORMULA:
+                cell_set_formula(clipboard_cell, cell->data.formula.expression);
+                clipboard_cell->data.formula.cached_value = cell->data.formula.cached_value;
+                clipboard_cell->data.formula.error = cell->data.formula.error;
+                break;
+            default:
+                clipboard_cell->type = CELL_EMPTY;
+                break;
+        }
+        
+        // Copy display properties
+        clipboard_cell->width = cell->width;
+        clipboard_cell->precision = cell->precision;
+        clipboard_cell->align = cell->align;
+    } else {
+        clipboard_cell = NULL;
+    }
+}
+
+void sheet_copy_cell(Sheet* sheet, int src_row, int src_col, int dest_row, int dest_col) {
+    Cell* src_cell = sheet_get_cell(sheet, src_row, src_col);
+    
+    if (!src_cell) {
+        // Clear destination cell if source is empty
+        sheet_clear_cell(sheet, dest_row, dest_col);
+        return;
+    }
+    
+    switch (src_cell->type) {
+        case CELL_NUMBER:
+            sheet_set_number(sheet, dest_row, dest_col, src_cell->data.number);
+            break;
+        case CELL_STRING:
+            sheet_set_string(sheet, dest_row, dest_col, src_cell->data.string);
+            break;
+        case CELL_FORMULA:
+            sheet_set_formula(sheet, dest_row, dest_col, src_cell->data.formula.expression);
+            break;
+        default:
+            sheet_clear_cell(sheet, dest_row, dest_col);
+            break;
+    }
+    
+    // Copy display properties
+    Cell* dest_cell = sheet_get_cell(sheet, dest_row, dest_col);
+    if (dest_cell) {
+        dest_cell->width = src_cell->width;
+        dest_cell->precision = src_cell->precision;
+        dest_cell->align = src_cell->align;
+    }
+    
+    sheet_recalculate(sheet);
+}
+
 // Parse a factor (number, cell reference, or function call)
 double parse_factor(Sheet* sheet, const char** expr, ErrorType* error) {
     skip_whitespace(expr);
@@ -723,39 +801,21 @@ double parse_term(Sheet* sheet, const char** expr, ErrorType* error) {
             break;
         }
     }
-    
-    return result;
+      return result;
 }
 
-// Parse arithmetic expression (handles + and -)
-double parse_arithmetic_expression(Sheet* sheet, const char* expr, ErrorType* error) {
+// Wrapper for backward compatibility with old API
+double parse_arithmetic_expression_old(Sheet* sheet, const char* expr, ErrorType* error) {
     const char* p = expr;
-    double result = parse_term(sheet, &p, error);
-    if (*error != ERROR_NONE) return 0.0;
-    
-    while (1) {
-        skip_whitespace(&p);
-        if (*p == '+') {
-            p++;
-            double right = parse_term(sheet, &p, error);
-            if (*error != ERROR_NONE) return 0.0;
-            result += right;
-        } else if (*p == '-') {
-            p++;
-            double right = parse_term(sheet, &p, error);
-            if (*error != ERROR_NONE) return 0.0;
-            result -= right;
-        } else {
-            break;
-        }
-    }
+    double result = parse_arithmetic_expression(sheet, &p, error);
     
     // Check for remaining characters
     skip_whitespace(&p);
     if (*p != '\0') {
         *error = ERROR_PARSE;
         return 0.0;
-    }    
+    }
+    
     return result;
 }
 
@@ -877,29 +937,82 @@ double parse_function(Sheet* sheet, const char** expr, ErrorType* error) {
         } else if (strcmp(func_name, "MIN") == 0) {
             return func_min(values, value_count);
         } else if (strcmp(func_name, "MEDIAN") == 0) {
-            return func_median(values, value_count);
-        } else if (strcmp(func_name, "MODE") == 0) {
+            return func_median(values, value_count);        } else if (strcmp(func_name, "MODE") == 0) {
             return func_mode(values, value_count);
         }
         
-    } else if (strcmp(func_name, "IF") == 0) {
-        // IF function: IF(condition, true_value, false_value)
-        // This is more complex as it needs to parse three separate expressions
-        
-        // For now, simplified IF implementation
-        // TODO: Implement proper IF parsing with three arguments
+    } else if (strcmp(func_name, "POWER") == 0) {
+        // POWER function: POWER(base, exponent)
         skip_whitespace(expr);
         
-        // Find closing parenthesis and skip for now
-        int paren_count = 1;
-        while (**expr && paren_count > 0) {
-            if (**expr == '(') paren_count++;
-            else if (**expr == ')') paren_count--;
-            (*expr)++;
-        }
+        // Parse first argument (base)
+        double base = parse_arithmetic_expression(sheet, expr, error);
+        if (*error != ERROR_NONE) return 0.0;
         
-        // Return 0 for now - full IF implementation would be more complex
-        return 0.0;
+        skip_whitespace(expr);
+        if (**expr != ',') {
+            *error = ERROR_PARSE;
+            return 0.0;
+        }
+        (*expr)++; // Skip comma
+        
+        // Parse second argument (exponent)  
+        double exponent = parse_arithmetic_expression(sheet, expr, error);
+        if (*error != ERROR_NONE) return 0.0;
+        
+        skip_whitespace(expr);
+        if (**expr != ')') {
+            *error = ERROR_PARSE;
+            return 0.0;
+        }
+        (*expr)++; // Skip closing parenthesis
+        
+        return func_power(base, exponent);
+        
+    } else if (strcmp(func_name, "IF") == 0) {
+        // IF function: IF(condition, true_value, false_value)
+        skip_whitespace(expr);
+        
+        // Parse condition
+        double condition = evaluate_comparison(sheet, *expr, error);
+        if (*error != ERROR_NONE) return 0.0;
+        
+        // Find comma after condition
+        int paren_count = 0;
+        const char* p = *expr;
+        while (*p && (paren_count > 0 || *p != ',')) {
+            if (*p == '(') paren_count++;
+            else if (*p == ')') paren_count--;
+            p++;
+        }
+        if (*p != ',') {
+            *error = ERROR_PARSE;
+            return 0.0;
+        }
+        *expr = p + 1; // Skip comma
+        
+        // Parse true value
+        double true_val = parse_arithmetic_expression(sheet, expr, error);
+        if (*error != ERROR_NONE) return 0.0;
+        
+        skip_whitespace(expr);
+        if (**expr != ',') {
+            *error = ERROR_PARSE;
+            return 0.0;
+        }
+        (*expr)++; // Skip comma
+        
+        // Parse false value
+        double false_val = parse_arithmetic_expression(sheet, expr, error);
+        if (*error != ERROR_NONE) return 0.0;
+        
+        skip_whitespace(expr);
+        if (**expr != ')') {
+            *error = ERROR_PARSE;
+            return 0.0;
+        }
+        (*expr)++; // Skip closing parenthesis
+          return func_if(condition, true_val, false_val);
     }
     
     *error = ERROR_PARSE;
@@ -913,44 +1026,78 @@ double evaluate_formula(Sheet* sheet, const char* formula, ErrorType* error) {
     // Skip leading '='
     if (*formula == '=') formula++;
     
-    // Very basic parser - just handles simple cases for now
-    // This should be replaced with a proper expression parser
+    // Try comparison expressions first (for IF function support)
+    return evaluate_comparison(sheet, formula, error);
+}
+
+// Evaluate comparison expressions (>, <, >=, <=, =, <>)
+double evaluate_comparison(Sheet* sheet, const char* expr, ErrorType* error) {
+    const char* p = expr;
+    double left = parse_arithmetic_expression(sheet, &p, error);
+    if (*error != ERROR_NONE) return left;
     
-    // Try to parse as a number
-    char* endptr;
-    double value = strtod(formula, &endptr);
-    if (*endptr == '\0') {
-        return value;
+    skip_whitespace(&p);
+    
+    // Check for comparison operators
+    if (*p == '>') {
+        p++;
+        if (*p == '=') {
+            p++; // >=
+            double right = parse_arithmetic_expression(sheet, &p, error);
+            return (left >= right) ? 1.0 : 0.0;
+        } else {
+            // >
+            double right = parse_arithmetic_expression(sheet, &p, error);
+            return (left > right) ? 1.0 : 0.0;
+        }
+    } else if (*p == '<') {
+        p++;
+        if (*p == '=') {
+            p++; // <=
+            double right = parse_arithmetic_expression(sheet, &p, error);
+            return (left <= right) ? 1.0 : 0.0;
+        } else if (*p == '>') {
+            p++; // <>
+            double right = parse_arithmetic_expression(sheet, &p, error);
+            return (left != right) ? 1.0 : 0.0;
+        } else {
+            // <
+            double right = parse_arithmetic_expression(sheet, &p, error);
+            return (left < right) ? 1.0 : 0.0;
+        }
+    } else if (*p == '=') {
+        p++; // =
+        double right = parse_arithmetic_expression(sheet, &p, error);
+        return (fabs(left - right) < 1e-10) ? 1.0 : 0.0; // Use tolerance for floating point comparison
     }
     
-    // Try to parse as a cell reference
-    int row, col;
-    if (parse_cell_reference(formula, &row, &col)) {
-        Cell* cell = sheet_get_cell(sheet, row, col);
-        if (!cell) {
-            *error = ERROR_REF;
-            return 0.0;
-        }
-        
-        switch (cell->type) {
-            case CELL_EMPTY:
-                return 0.0;
-            case CELL_NUMBER:
-                return cell->data.number;
-            case CELL_FORMULA:
-                if (cell->data.formula.error != ERROR_NONE) {
-                    *error = cell->data.formula.error;
-                    return 0.0;
-                }
-                return cell->data.formula.cached_value;
-            default:
-                *error = ERROR_VALUE;
-                return 0.0;
+    // No comparison operator found, return the arithmetic expression result
+    return left;
+}
+
+// Enhanced arithmetic expression parser (with updated signature)
+double parse_arithmetic_expression(Sheet* sheet, const char** expr, ErrorType* error) {
+    double result = parse_term(sheet, expr, error);
+    if (*error != ERROR_NONE) return 0.0;
+    
+    while (1) {
+        skip_whitespace(expr);
+        if (**expr == '+') {
+            (*expr)++;
+            double right = parse_term(sheet, expr, error);
+            if (*error != ERROR_NONE) return 0.0;
+            result += right;
+        } else if (**expr == '-') {
+            (*expr)++;
+            double right = parse_term(sheet, expr, error);
+            if (*error != ERROR_NONE) return 0.0;
+            result -= right;
+        } else {
+            break;
         }
     }
     
-    // Basic arithmetic expression parser
-    return parse_arithmetic_expression(sheet, formula, error);
+    return result;
 }
 
 // Recalculate all formulas in the sheet

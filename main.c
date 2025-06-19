@@ -1,4 +1,4 @@
-// main.c - Main program for Windows Terminal Spreadsheet Calculator
+// main.c - Main program for WinSpread
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -48,6 +48,8 @@ void app_start_input(AppState* state, AppMode mode);
 void app_finish_input(AppState* state);
 void app_cancel_input(AppState* state);
 void app_update_cursor_blink(AppState* state);
+void app_copy_cell(AppState* state);
+void app_paste_cell(AppState* state);
 
 // Initialize application
 void app_init(AppState* state) {
@@ -69,14 +71,19 @@ void app_init(AppState* state) {
     state->cursor_blink_rate = 500;  // 500ms blink rate
     
     console_hide_cursor(state->console);
-    
-    // Add some sample data
+      // Add some sample data
     sheet_set_string(state->sheet, 0, 0, "Windows Terminal Spreadsheet");
     sheet_set_string(state->sheet, 2, 0, "Commands:");
     sheet_set_string(state->sheet, 3, 0, "= - Enter number/formula");
     sheet_set_string(state->sheet, 4, 0, "\" - Enter text");
     sheet_set_string(state->sheet, 5, 0, ": - Command mode");
     sheet_set_string(state->sheet, 6, 0, "hjkl - Navigate");
+    sheet_set_string(state->sheet, 7, 0, "Ctrl+C - Copy cell");
+    sheet_set_string(state->sheet, 8, 0, "Ctrl+V - Paste cell");
+    sheet_set_string(state->sheet, 10, 0, "Functions: SUM, AVG, MAX, MIN, MEDIAN, MODE");
+    sheet_set_string(state->sheet, 11, 0, "IF(condition, true_val, false_val)");
+    sheet_set_string(state->sheet, 12, 0, "POWER(base, exponent)");
+    sheet_set_string(state->sheet, 13, 0, "Operators: +, -, *, /, >, <, >=, <=, =, <>");
 }
 
 // Cleanup
@@ -320,6 +327,25 @@ void app_execute_command(AppState* state, const char* command) {
     }
 }
 
+// Copy current cell to clipboard
+void app_copy_cell(AppState* state) {
+    Cell* cell = sheet_get_cell(state->sheet, state->cursor_row, state->cursor_col);
+    sheet_set_clipboard_cell(cell);
+    strcpy_s(state->status_message, sizeof(state->status_message), "Cell copied");
+}
+
+// Paste clipboard cell to current position
+void app_paste_cell(AppState* state) {
+    Cell* clipboard = sheet_get_clipboard_cell();
+    if (clipboard) {
+        sheet_copy_cell(state->sheet, clipboard->row, clipboard->col, 
+                       state->cursor_row, state->cursor_col);
+        strcpy_s(state->status_message, sizeof(state->status_message), "Cell pasted");
+    } else {
+        strcpy_s(state->status_message, sizeof(state->status_message), "Nothing to paste");
+    }
+}
+
 // Handle keyboard input
 void app_handle_input(AppState* state, KeyEvent* key) {
     if (state->mode == MODE_NORMAL) {
@@ -349,13 +375,22 @@ void app_handle_input(AppState* state, KeyEvent* key) {
                     break;
                 case ':':
                     app_start_input(state, MODE_COMMAND);
-                    break;
-                case 'x':
+                    break;                case 'x':
                     sheet_clear_cell(state->sheet, state->cursor_row, state->cursor_col);
                     sheet_recalculate(state->sheet);
                     strcpy_s(state->status_message, sizeof(state->status_message), "Cell cleared");
                     break;
-                    
+                case 'c':
+                    if (key->ctrl) {
+                        app_copy_cell(state);
+                    }
+                    break;
+                case 'v':
+                    if (key->ctrl) {
+                        app_paste_cell(state);
+                    }
+                    break;
+                
                 // Quick quit
                 case 'q':
                     if (key->ctrl) {
