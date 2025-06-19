@@ -7,6 +7,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+// Include debug logging
+extern void debug_log(const char* format, ...);
+extern FILE* debug_file;
+
 // Console color attributes
 #define COLOR_BLACK         0
 #define COLOR_BLUE          1
@@ -222,15 +226,37 @@ void console_draw_box(Console* con, SHORT x, SHORT y, SHORT w, SHORT h, WORD att
 }
 
 void console_flip(Console* con) {
+    if (debug_file) debug_log("console_flip called");
+    
+    if (!con) {
+        if (debug_file) debug_log("ERROR: console_flip - con is NULL");
+        return;
+    }
+    
+    if (!con->backBuffer) {
+        if (debug_file) debug_log("ERROR: console_flip - backBuffer is NULL");
+        return;
+    }
+    
+    if (debug_file) debug_log("console_flip - calling WriteConsoleOutput, size: %dx%d", con->width, con->height);
+    
     // Only update changed characters (optimization)
     COORD bufferSize = {con->width, con->height};
     COORD bufferCoord = {0, 0};
     SMALL_RECT writeRegion = {0, 0, con->width - 1, con->height - 1};
     
-    WriteConsoleOutput(con->hOut, con->backBuffer, bufferSize, bufferCoord, &writeRegion);
+    BOOL result = WriteConsoleOutput(con->hOut, con->backBuffer, bufferSize, bufferCoord, &writeRegion);
+    if (!result) {
+        DWORD error = GetLastError();
+        if (debug_file) debug_log("ERROR: WriteConsoleOutput failed with error: %lu", error);
+        return;
+    }
     
+    if (debug_file) debug_log("WriteConsoleOutput succeeded, copying buffers");
     // Copy back buffer to front buffer
     memcpy(con->frontBuffer, con->backBuffer, con->width * con->height * sizeof(CHAR_INFO));
+    
+    if (debug_file) debug_log("console_flip completed successfully");
 }
 
 BOOL console_get_key(Console* con, KeyEvent* key) {

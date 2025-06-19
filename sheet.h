@@ -683,16 +683,15 @@ double parse_factor(Sheet* sheet, const char** expr, ErrorType* error) {
     
     if (**expr == '(') {
         (*expr)++; // Skip '('
-        double result = parse_arithmetic_expression(sheet, *expr, error);
+        double result = parse_arithmetic_expression(sheet, expr, error);
         if (*error != ERROR_NONE) return 0.0;
         
-        // Find matching ')'
-        int paren_count = 1;
-        while (**expr && paren_count > 0) {
-            if (**expr == '(') paren_count++;
-            else if (**expr == ')') paren_count--;
-            (*expr)++;
+        skip_whitespace(expr);
+        if (**expr != ')') {
+            *error = ERROR_PARSE;
+            return 0.0;
         }
+        (*expr)++; // Skip ')'
         
         return result;
     }

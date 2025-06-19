@@ -87,16 +87,16 @@ A powerful, vi-style spreadsheet application that runs entirely in the Windows t
 
 (COPILOT, SUM IS THE EXAMPLE. MODEL THE OTHER SEVEN AFTER IT. SHOW ALL POSSIBLE AND ADVANCED WAYS A FORUMLA COULD BE IMPLEMENTED)
 
-1. SUM: 
-    -`=SUM(A1:A6)`
-    -`SUM(B33:G33)`
-2. AVG:
-3. MAX:
-4. MIN: 
-5. MEDIAN:
-6. MODE:
-7. IF:
-8. POWER:
+1. SUM:
+   a. `=SUM(A1:A6)`
+   b. `SUM(B33:G33)`
+3. AVG:
+4. MAX:
+5. MIN: 
+6. MEDIAN:
+7. MODE:
+8. IF:
+9. POWER:
 
 ## File Structure
 

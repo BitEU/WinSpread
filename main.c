@@ -61,14 +61,25 @@ void app_init(AppState* state) {
     } else {
         debug_log("Sheet created successfully");
     }
-    
-    debug_log("Initializing console");
+      debug_log("Initializing console");
     state->console = console_init();
     if (!state->console) {
         debug_log("ERROR: Failed to initialize console");
     } else {
         debug_log("Console initialized successfully, size: %dx%d", 
                  state->console->width, state->console->height);
+        
+        // Check if console is large enough
+        if (state->console->height < 10 || state->console->width < 40) {
+            debug_log("Console too small! Minimum size required: 40x10, actual: %dx%d", 
+                      state->console->width, state->console->height);
+            printf("ERROR: Console window too small!\n");
+            printf("Current size: %dx%d\n", state->console->width, state->console->height);
+            printf("Minimum required: 40x10\n");
+            printf("Please resize your console window and try again.\n");
+            console_cleanup(state->console);
+            state->console = NULL;
+        }
     }
     
     // Check if initialization was successful
@@ -95,15 +106,18 @@ void app_init(AppState* state) {
     state->input_buffer[0] = '\0';
     state->input_pos = 0;
     strcpy_s(state->status_message, sizeof(state->status_message), "Ready");
-    state->running = TRUE;
-    
+    state->running = TRUE;    
     // Initialize cursor blinking
+    debug_log("Initializing cursor blinking");
     state->cursor_blink_time = GetTickCount();
     state->cursor_visible = TRUE;
     state->cursor_blink_rate = 500;  // 500ms blink rate
     
+    debug_log("Hiding console cursor");
     console_hide_cursor(state->console);
-      // Add some sample data
+    
+    debug_log("Adding sample data to sheet");
+    // Add some sample data
     sheet_set_string(state->sheet, 0, 0, "Windows Terminal Spreadsheet");
     sheet_set_string(state->sheet, 2, 0, "Commands:");
     sheet_set_string(state->sheet, 3, 0, "= - Enter number/formula");
@@ -116,6 +130,8 @@ void app_init(AppState* state) {
     sheet_set_string(state->sheet, 11, 0, "IF(condition, true_val, false_val)");
     sheet_set_string(state->sheet, 12, 0, "POWER(base, exponent)");
     sheet_set_string(state->sheet, 13, 0, "Operators: +, -, *, /, >, <, >=, <=, =, <>");
+    
+    debug_log("app_init completed successfully");
 }
 
 // Cleanup
@@ -141,12 +157,16 @@ void app_update_cursor_blink(AppState* state) {
 
 // Render the spreadsheet
 void app_render(AppState* state) {
+    debug_log("Starting app_render");
     Console* con = state->console;
     
     // Safety check
     if (!con || !con->backBuffer) {
+        debug_log("ERROR: Console or backBuffer is NULL");
         return;
     }
+    
+    debug_log("Console size: %dx%d", con->width, con->height);
     
     // Colors
     WORD headerColor = MAKE_COLOR(COLOR_BLACK, COLOR_WHITE);
@@ -154,18 +174,29 @@ void app_render(AppState* state) {
     WORD selectedColor = MAKE_COLOR(COLOR_BLACK, COLOR_CYAN);
     WORD gridColor = MAKE_COLOR(COLOR_WHITE | COLOR_BRIGHT, COLOR_BLACK);
     
+    debug_log("Clearing back buffer");
     // Clear back buffer
     for (int i = 0; i < con->width * con->height; i++) {
         con->backBuffer[i].Char.AsciiChar = ' ';
         con->backBuffer[i].Attributes = cellColor;
     }
-    
+      debug_log("Calculating visible area");
     // Calculate visible area
     int col_header_width = 4;
     int status_height = 2;
     int visible_cols = (con->width - col_header_width) / 10;
     int visible_rows = con->height - status_height - 1;
     
+    debug_log("Visible area: %dx%d", visible_cols, visible_rows);
+    debug_log("View position: top=%d, left=%d", state->view_top, state->view_left);
+    debug_log("Cursor position: row=%d, col=%d", state->cursor_row, state->cursor_col);
+    
+    // Safety check for minimum viable display area
+    if (visible_rows < 1 || visible_cols < 1) {
+        debug_log("ERROR: Visible area too small: %dx%d", visible_cols, visible_rows);
+        return;
+    }
+    debug_log("Drawing column headers");
     // Draw column headers
     for (int i = 0; i < visible_cols && state->view_left + i < state->sheet->cols; i++) {
         char colName[10];
@@ -182,6 +213,7 @@ void app_render(AppState* state) {
         console_write_string(con, x, 0, colName, headerColor);
     }
     
+    debug_log("Drawing row headers");
     // Draw row headers
     for (int i = 0; i < visible_rows && state->view_top + i < state->sheet->rows; i++) {
         char rowNum[10];
@@ -189,6 +221,7 @@ void app_render(AppState* state) {
         console_write_string(con, 0, i + 1, rowNum, headerColor);
     }
     
+    debug_log("Drawing grid and cell contents");
     // Draw grid and cell contents
     for (int row = 0; row < visible_rows && state->view_top + row < state->sheet->rows; row++) {
         for (int col = 0; col < visible_cols && state->view_left + col < state->sheet->cols; col++) {
@@ -233,23 +266,29 @@ void app_render(AppState* state) {
                     console_write_char(con, cursor_x, y, '_', selectedColor);
                 }
             }
-        }
-    }
+        }    }
     
+    debug_log("Drawing horizontal line");
     // Draw horizontal line above status
     int status_y = con->height - status_height;
     for (int x = 0; x < con->width; x++) {
         console_write_char(con, x, status_y, '-', headerColor);
-    }    // Draw status line
+    }    
+    
+    debug_log("Drawing status line");
+    // Draw status line
     char status[256];
     char* cellRef = cell_reference_to_string(state->cursor_row, state->cursor_col);
     Cell* currentCell = sheet_get_cell(state->sheet, state->cursor_row, state->cursor_col);
     
     // Safety check for cellRef
     if (!cellRef) {
+        debug_log("WARNING: cellRef is NULL, using default");
         static char defaultRef[] = "A1";
         cellRef = defaultRef;
     }
+    
+    debug_log("Cell reference: %s", cellRef);
     
     if (state->mode == MODE_NORMAL) {
         if (currentCell && currentCell->type == CELL_FORMULA) {
@@ -276,12 +315,13 @@ void app_render(AppState* state) {
         
         sprintf_s(status, sizeof(status), "[%s] %s > %s", 
                 state->sheet->name, cellRef, input_with_cursor);
-    }
-    
+    }    
     console_write_string(con, 0, status_y + 1, status, headerColor);
     
+    debug_log("Calling console_flip");
     // Update screen
     console_flip(con);
+    debug_log("console_flip completed, app_render finished");
 }
 
 // Start input mode
@@ -513,36 +553,52 @@ void app_handle_input(AppState* state, KeyEvent* key) {
 
 // Main program
 int main() {
+    debug_init();
+    debug_log("=== Starting WinSpread ===");
+    
     AppState state;
     
     // Initialize
+    debug_log("Calling app_init");
     app_init(&state);
     
     // Check if initialization failed
     if (!state.running) {
+        debug_log("ERROR: Initialization failed");
         printf("Failed to initialize application\n");
+        debug_cleanup();
         return 1;
     }
     
+    debug_log("Entering main loop");
     // Main loop
     while (state.running) {
+        debug_log("Main loop iteration - updating cursor blink");
         // Update cursor blinking
         app_update_cursor_blink(&state);
         
+        debug_log("Calling app_render");
         app_render(&state);
+        debug_log("app_render completed");
         
+        debug_log("Checking for key input");
         KeyEvent key;
         if (console_get_key(state.console, &key)) {
+            debug_log("Key pressed, handling input");
             app_handle_input(&state, &key);
             
             // Reset cursor to visible when user interacts
             state.cursor_visible = TRUE;
             state.cursor_blink_time = GetTickCount();
+            debug_log("Input handled");
         }
         
         Sleep(16);  // ~60 FPS
     }
     
+    debug_log("Exiting main loop, cleaning up");
     app_cleanup(&state);
+    debug_log("=== WinSpread Ended ===");
+    debug_cleanup();
     return 0;
 }
