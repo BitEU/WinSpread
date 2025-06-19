@@ -81,9 +81,22 @@ Console* console_init(void) {
     con->hOut = GetStdHandle(STD_OUTPUT_HANDLE);
     con->hIn = GetStdHandle(STD_INPUT_HANDLE);
     
+    // Check if handles are valid
+    if (con->hOut == INVALID_HANDLE_VALUE || con->hIn == INVALID_HANDLE_VALUE) {
+        free(con);
+        return NULL;
+    }
+    
     // Save original console state
-    GetConsoleScreenBufferInfo(con->hOut, &con->originalInfo);
-    GetConsoleMode(con->hIn, &con->originalMode);
+    if (!GetConsoleScreenBufferInfo(con->hOut, &con->originalInfo)) {
+        free(con);
+        return NULL;
+    }
+    
+    if (!GetConsoleMode(con->hIn, &con->originalMode)) {
+        free(con);
+        return NULL;
+    }
     
     // Set input mode for reading individual keys
     SetConsoleMode(con->hIn, ENABLE_WINDOW_INPUT | ENABLE_MOUSE_INPUT);
@@ -94,10 +107,24 @@ Console* console_init(void) {
     con->width = csbi.srWindow.Right - csbi.srWindow.Left + 1;
     con->height = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
     
+    // Validate console size
+    if (con->width <= 0 || con->height <= 0) {
+        free(con);
+        return NULL;
+    }
+    
     // Allocate double buffer
     int bufferSize = con->width * con->height;
     con->backBuffer = (CHAR_INFO*)malloc(bufferSize * sizeof(CHAR_INFO));
     con->frontBuffer = (CHAR_INFO*)malloc(bufferSize * sizeof(CHAR_INFO));
+    
+    // Check if allocation succeeded
+    if (!con->backBuffer || !con->frontBuffer) {
+        if (con->backBuffer) free(con->backBuffer);
+        if (con->frontBuffer) free(con->frontBuffer);
+        free(con);
+        return NULL;
+    }
     
     // Initialize buffers
     for (int i = 0; i < bufferSize; i++) {
@@ -120,8 +147,14 @@ void console_cleanup(Console* con) {
     SetConsoleMode(con->hIn, con->originalMode);
     
     // Free buffers
-    free(con->backBuffer);
-    free(con->frontBuffer);
+    if (con->backBuffer) {
+        free(con->backBuffer);
+        con->backBuffer = NULL;
+    }
+    if (con->frontBuffer) {
+        free(con->frontBuffer);
+        con->frontBuffer = NULL;
+    }
     free(con);
 }
 

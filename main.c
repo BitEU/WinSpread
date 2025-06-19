@@ -7,6 +7,7 @@
 
 #include "console.h"
 #include "sheet.h"
+#include "debug.h"
 
 // Helper macros - use min/max from Windows headers
 
@@ -49,12 +50,43 @@ void app_finish_input(AppState* state);
 void app_cancel_input(AppState* state);
 void app_update_cursor_blink(AppState* state);
 void app_copy_cell(AppState* state);
-void app_paste_cell(AppState* state);
-
-// Initialize application
+void app_paste_cell(AppState* state);    // Initialize application
 void app_init(AppState* state) {
+    debug_log("Starting app_init");
+    
+    debug_log("Creating sheet with 1000x100 dimensions");
     state->sheet = sheet_new(1000, 100);
+    if (!state->sheet) {
+        debug_log("ERROR: Failed to create sheet");
+    } else {
+        debug_log("Sheet created successfully");
+    }
+    
+    debug_log("Initializing console");
     state->console = console_init();
+    if (!state->console) {
+        debug_log("ERROR: Failed to initialize console");
+    } else {
+        debug_log("Console initialized successfully, size: %dx%d", 
+                 state->console->width, state->console->height);
+    }
+    
+    // Check if initialization was successful
+    if (!state->sheet || !state->console) {
+        debug_log("ERROR: Initialization failed, cleaning up");
+        if (state->sheet) {
+            sheet_free(state->sheet);
+            debug_log("Sheet freed");
+        }
+        if (state->console) {
+            console_cleanup(state->console);
+            debug_log("Console cleaned up");
+        }
+        state->running = FALSE;
+        return;
+    }
+    
+    debug_log("Setting initial state");
     state->mode = MODE_NORMAL;
     state->cursor_row = 0;
     state->cursor_col = 0;
@@ -88,8 +120,14 @@ void app_init(AppState* state) {
 
 // Cleanup
 void app_cleanup(AppState* state) {
-    sheet_free(state->sheet);
-    console_cleanup(state->console);
+    if (state->sheet) {
+        sheet_free(state->sheet);
+        state->sheet = NULL;
+    }
+    if (state->console) {
+        console_cleanup(state->console);
+        state->console = NULL;
+    }
 }
 
 // Update cursor blink state
@@ -104,6 +142,11 @@ void app_update_cursor_blink(AppState* state) {
 // Render the spreadsheet
 void app_render(AppState* state) {
     Console* con = state->console;
+    
+    // Safety check
+    if (!con || !con->backBuffer) {
+        return;
+    }
     
     // Colors
     WORD headerColor = MAKE_COLOR(COLOR_BLACK, COLOR_WHITE);
@@ -197,11 +240,16 @@ void app_render(AppState* state) {
     int status_y = con->height - status_height;
     for (int x = 0; x < con->width; x++) {
         console_write_char(con, x, status_y, '-', headerColor);
-    }
-      // Draw status line
+    }    // Draw status line
     char status[256];
     char* cellRef = cell_reference_to_string(state->cursor_row, state->cursor_col);
     Cell* currentCell = sheet_get_cell(state->sheet, state->cursor_row, state->cursor_col);
+    
+    // Safety check for cellRef
+    if (!cellRef) {
+        static char defaultRef[] = "A1";
+        cellRef = defaultRef;
+    }
     
     if (state->mode == MODE_NORMAL) {
         if (currentCell && currentCell->type == CELL_FORMULA) {
@@ -466,7 +514,15 @@ void app_handle_input(AppState* state, KeyEvent* key) {
 // Main program
 int main() {
     AppState state;
+    
+    // Initialize
     app_init(&state);
+    
+    // Check if initialization failed
+    if (!state.running) {
+        printf("Failed to initialize application\n");
+        return 1;
+    }
     
     // Main loop
     while (state.running) {
