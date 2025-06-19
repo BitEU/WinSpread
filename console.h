@@ -310,10 +310,13 @@ BOOL console_get_key(Console* con, KeyEvent* key) {
             } else if (keyEvent->wVirtualKeyCode == VK_END) {
                 key->type = 1;
                 key->key.special = KEY_END;
-                return TRUE;
-            } else if (keyEvent->wVirtualKeyCode == VK_F1) {
+                return TRUE;            } else if (keyEvent->wVirtualKeyCode == VK_F1) {
                 key->type = 1;
                 key->key.special = KEY_F1;
+                return TRUE;            } else if (keyEvent->wVirtualKeyCode >= 'A' && keyEvent->wVirtualKeyCode <= 'Z' && key->ctrl) {
+                // Handle Ctrl+letter combinations (with or without Shift)
+                key->type = 0;
+                key->key.ch = (char)keyEvent->wVirtualKeyCode + ('a' - 'A'); // Convert to lowercase
                 return TRUE;
             } else if (keyEvent->uChar.AsciiChar != 0) {
                 // Regular character

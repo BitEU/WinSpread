@@ -74,8 +74,10 @@ A powerful, vi-style spreadsheet application that runs entirely in the Windows t
 
 ### Cell Operations
 - **`x`** - Clear current cell
-- **`Ctrl+C`** - Copy current cell
-- **`Ctrl+V`** - Paste copied cell
+- **`Ctrl+C`** - Copy current cell (internal)
+- **`Ctrl+V`** - Paste copied cell (internal)
+- **`Ctrl+Shift+C`** - Copy current cell (external)
+- **`Ctrl+Shift+V`** - Paste copied cell (external)
 - **`Ctrl+Q`** - Quick quit
 
 ### Command Mode
@@ -85,18 +87,126 @@ A powerful, vi-style spreadsheet application that runs entirely in the Windows t
 
 ## Functions
 
-(COPILOT, SUM IS THE EXAMPLE. MODEL THE OTHER SEVEN AFTER IT. SHOW ALL POSSIBLE AND ADVANCED WAYS A FORUMLA COULD BE IMPLEMENTED)
+WinSpread supports a comprehensive set of built-in functions for mathematical calculations, statistical analysis, and conditional logic. All functions are case-sensitive and must be entered in UPPERCASE.
 
-1. SUM:
-   a. `=SUM(A1:A6)`
-   b. `SUM(B33:G33)`
-3. AVG:
-4. MAX:
-5. MIN: 
-6. MEDIAN:
-7. MODE:
-8. IF:
-9. POWER:
+### 1. SUM Function
+**Syntax:** `=SUM(range)` or `=SUM(value1, value2, ...)`
+**Description:** Calculates the sum of all numeric values in the specified range or arguments.
+
+**Examples:**
+- `=SUM(A1:A6)` - Sum cells A1 through A6
+- `=SUM(B33:G33)` - Sum cells B33 through G33 (horizontal range)
+- `=SUM(A1:C3)` - Sum all cells in the rectangular range A1 to C3
+- `=SUM(A1:A10, C1:C5)` - Sum multiple ranges (if implemented)
+
+### 2. AVG Function
+**Syntax:** `=AVG(range)` or `=AVG(value1, value2, ...)`
+**Description:** Calculates the arithmetic mean (average) of all numeric values in the specified range.
+
+**Examples:**
+- `=AVG(A1:A10)` - Average of cells A1 through A10
+- `=AVG(B1:B20)` - Average of cells B1 through B20
+- `=AVG(A1:E1)` - Average of cells A1 through E1 (horizontal range)
+- `=AVG(A1:C3)` - Average of all cells in the rectangular range A1 to C3
+
+### 3. MAX Function
+**Syntax:** `=MAX(range)` or `=MAX(value1, value2, ...)`
+**Description:** Returns the largest (maximum) value from the specified range or arguments.
+
+**Examples:**
+- `=MAX(A1:A10)` - Maximum value in cells A1 through A10
+- `=MAX(B1:D1)` - Maximum value in cells B1 through D1
+- `=MAX(A1:C5)` - Maximum value in the rectangular range A1 to C5
+- `=MAX(A1:A5, C1:C5)` - Maximum value across multiple ranges
+
+### 4. MIN Function
+**Syntax:** `=MIN(range)` or `=MIN(value1, value2, ...)`
+**Description:** Returns the smallest (minimum) value from the specified range or arguments.
+
+**Examples:**
+- `=MIN(A1:A10)` - Minimum value in cells A1 through A10
+- `=MIN(B1:D1)` - Minimum value in cells B1 through D1
+- `=MIN(A1:C5)` - Minimum value in the rectangular range A1 to C5
+- `=MIN(A1:A5, C1:C5)` - Minimum value across multiple ranges
+
+### 5. MEDIAN Function
+**Syntax:** `=MEDIAN(range)` or `=MEDIAN(value1, value2, ...)`
+**Description:** Returns the median (middle value) of the specified range. For even number of values, returns the average of the two middle values.
+
+**Examples:**
+- `=MEDIAN(A1:A9)` - Median of cells A1 through A9 (odd count)
+- `=MEDIAN(A1:A10)` - Median of cells A1 through A10 (even count)
+- `=MEDIAN(B1:E1)` - Median of horizontal range B1 through E1
+- `=MEDIAN(A1:C3)` - Median of all values in rectangular range A1 to C3
+
+### 6. MODE Function
+**Syntax:** `=MODE(range)` or `=MODE(value1, value2, ...)`
+**Description:** Returns the most frequently occurring value in the specified range. If multiple values have the same highest frequency, returns the first one encountered.
+
+**Examples:**
+- `=MODE(A1:A10)` - Most frequent value in cells A1 through A10
+- `=MODE(B1:B20)` - Most frequent value in cells B1 through B20
+- `=MODE(A1:E1)` - Most frequent value in horizontal range A1 through E1
+- `=MODE(A1:C5)` - Most frequent value in rectangular range A1 to C5
+
+### 7. IF Function
+**Syntax:** `=IF(condition, true_value, false_value)`
+**Description:** Evaluates a condition and returns one value if true, another if false. Supports both numeric and string values.
+
+**Comparison Operators:**
+- `=` (equals), `<>` (not equals)
+- `<` (less than), `>` (greater than)
+- `<=` (less than or equal), `>=` (greater than or equal)
+
+**Examples:**
+- `=IF(A1>10, "High", "Low")` - Return "High" if A1 > 10, otherwise "Low"
+- `=IF(B1=0, "Zero", B1*2)` - Return "Zero" if B1 is 0, otherwise double B1
+- `=IF(A1>=B1, A1, B1)` - Return the larger of A1 or B1
+- `=IF(C1="Yes", 100, 0)` - Return 100 if C1 contains "Yes", otherwise 0
+- `=IF(A1<>B1, "Different", "Same")` - Compare two cells for equality
+
+**String Comparisons:**
+- `=IF(A1="Apple", "Fruit", "Other")` - Check if A1 contains "Apple"
+- `=IF(B1<>"", "Has Value", "Empty")` - Check if B1 is not empty
+
+### 8. POWER Function
+**Syntax:** `=POWER(base, exponent)`
+**Description:** Raises a number to a specified power (base^exponent).
+
+**Examples:**
+- `=POWER(2, 3)` - Calculate 2³ = 8
+- `=POWER(A1, 2)` - Square the value in A1
+- `=POWER(10, B1)` - Calculate 10 raised to the power of B1
+- `=POWER(A1, 0.5)` - Calculate square root of A1 (A1^0.5)
+- `=POWER(A1, 1/3)` - Calculate cube root of A1
+
+### Mathematical Operators
+
+**Arithmetic Operators:**
+- `+` Addition: `=A1+B1`, `=SUM(A1:A5)+10`
+- `-` Subtraction: `=A1-B1`, `=MAX(A1:A5)-MIN(A1:A5)`
+- `*` Multiplication: `=A1*B1`, `=A1*2.5`
+- `/` Division: `=A1/B1`, `=SUM(A1:A5)/5`
+
+**Complex Formula Examples:**
+- `=SUM(A1:A10)/MAX(B1:B10)` - Ratio of sum to maximum
+- `=IF(AVG(A1:A10)>50, "Pass", "Fail")` - Conditional based on average
+- `=POWER(A1, 2) + POWER(B1, 2)` - Sum of squares
+- `=IF(A1>0, POWER(A1, 0.5), 0)` - Square root if positive, else 0
+
+### Range Notation
+
+**Supported Range Formats:**
+- `A1:A10` - Vertical range (column A, rows 1-10)
+- `A1:E1` - Horizontal range (row 1, columns A-E)
+- `A1:C3` - Rectangular range (3×3 block)
+- `B5:D10` - Rectangular range (3×6 block)
+
+**Range Examples:**
+- Single column: `=SUM(A1:A100)`
+- Single row: `=AVG(A1:Z1)`
+- Rectangle: `=MAX(A1:E10)`
+- Large range: `=MIN(A1:Z100)`
 
 ## File Structure
 
@@ -106,6 +216,7 @@ WinSpread/
 ├── sheet.h         # Spreadsheet engine and formula parser
 ├── console.h       # Windows console wrapper and input handling
 ├── compat.h        # Compatibility definitions
+├── debug.h        # Manages debugging log
 ├── build.bat       # Build script for Windows
 ├── LICENSE         # GPL v3 license
 └── README.md       # This file
@@ -181,4 +292,4 @@ This project is licensed under the GNU General Public License v3.0 - see the [LI
 
 ---
 
-*WinSpread - Bringing spreadsheet power to your Windows terminal*
+*WinSpread - Party like it's 1979*

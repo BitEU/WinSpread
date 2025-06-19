@@ -48,9 +48,17 @@ void app_execute_command(AppState* state, const char* command);
 void app_start_input(AppState* state, AppMode mode);
 void app_finish_input(AppState* state);
 void app_cancel_input(AppState* state);
+void app_copy_cell(AppState* state);
+void app_paste_cell(AppState* state);
+void app_copy_to_system_clipboard(AppState* state);
+void app_paste_from_system_clipboard(AppState* state);
+BOOL set_system_clipboard_text(const char* text);
+char* get_system_clipboard_text(void);
 void app_update_cursor_blink(AppState* state);
 void app_copy_cell(AppState* state);
-void app_paste_cell(AppState* state);    // Initialize application
+void app_paste_cell(AppState* state);
+void app_copy_to_system_clipboard(AppState* state);
+void app_paste_from_system_clipboard(AppState* state);    // Initialize application
 void app_init(AppState* state) {
     debug_log("Starting app_init");
     
@@ -123,13 +131,14 @@ void app_init(AppState* state) {
     sheet_set_string(state->sheet, 3, 0, "= - Enter number/formula");
     sheet_set_string(state->sheet, 4, 0, "\" - Enter text");
     sheet_set_string(state->sheet, 5, 0, ": - Command mode");
-    sheet_set_string(state->sheet, 6, 0, "hjkl - Navigate");
-    sheet_set_string(state->sheet, 7, 0, "Ctrl+C - Copy cell");
-    sheet_set_string(state->sheet, 8, 0, "Ctrl+V - Paste cell");
-    sheet_set_string(state->sheet, 10, 0, "Functions: SUM, AVG, MAX, MIN, MEDIAN, MODE");
-    sheet_set_string(state->sheet, 11, 0, "IF(condition, true_val, false_val)");
-    sheet_set_string(state->sheet, 12, 0, "POWER(base, exponent)");
-    sheet_set_string(state->sheet, 13, 0, "Operators: +, -, *, /, >, <, >=, <=, =, <>");
+    sheet_set_string(state->sheet, 6, 0, "hjkl - Navigate");    sheet_set_string(state->sheet, 7, 0, "Ctrl+C - Copy cell (internal)");
+    sheet_set_string(state->sheet, 8, 0, "Ctrl+V - Paste cell (internal)");
+    sheet_set_string(state->sheet, 9, 0, "Ctrl+Shift+C - Copy to system clipboard");
+    sheet_set_string(state->sheet, 10, 0, "Ctrl+Shift+V - Paste from system clipboard");
+    sheet_set_string(state->sheet, 11, 0, "Functions: SUM, AVG, MAX, MIN, MEDIAN, MODE");
+    sheet_set_string(state->sheet, 12, 0, "IF(condition, true_val, false_val)");
+    sheet_set_string(state->sheet, 13, 0, "POWER(base, exponent)");
+    sheet_set_string(state->sheet, 14, 0, "Operators: +, -, *, /, >, <, >=, <=, =, <>");
     
     debug_log("app_init completed successfully");
 }
@@ -434,6 +443,111 @@ void app_paste_cell(AppState* state) {
     }
 }
 
+// Copy current cell to system clipboard
+void app_copy_to_system_clipboard(AppState* state) {
+    Cell* cell = sheet_get_cell(state->sheet, state->cursor_row, state->cursor_col);
+    if (cell) {
+        char* text = sheet_get_display_value(state->sheet, state->cursor_row, state->cursor_col);
+        if (text) {
+            set_system_clipboard_text(text);
+            strcpy_s(state->status_message, sizeof(state->status_message), "Cell content copied to system clipboard");
+        } else {
+            strcpy_s(state->status_message, sizeof(state->status_message), "Failed to get cell content");
+        }
+    } else {
+        set_system_clipboard_text(""); // Copy empty string for empty cell
+        strcpy_s(state->status_message, sizeof(state->status_message), "Empty cell copied to system clipboard");
+    }
+}
+
+// Paste from system clipboard to current cell
+void app_paste_from_system_clipboard(AppState* state) {
+    char* text = get_system_clipboard_text();
+    if (text) {
+        // Try to determine what type of data this is
+        if (strlen(text) == 0) {
+            // Empty string - clear cell
+            sheet_clear_cell(state->sheet, state->cursor_row, state->cursor_col);
+            strcpy_s(state->status_message, sizeof(state->status_message), "Cell cleared from system clipboard");
+        } else if (text[0] == '=') {
+            // Formula
+            sheet_set_formula(state->sheet, state->cursor_row, state->cursor_col, text);
+            sheet_recalculate(state->sheet);
+            strcpy_s(state->status_message, sizeof(state->status_message), "Formula pasted from system clipboard");
+        } else {
+            // Try to parse as number
+            char* endptr;
+            double num = strtod(text, &endptr);
+            if (*endptr == '\0' || (*endptr == '\n' && *(endptr+1) == '\0')) {
+                // It's a number
+                sheet_set_number(state->sheet, state->cursor_row, state->cursor_col, num);
+                strcpy_s(state->status_message, sizeof(state->status_message), "Number pasted from system clipboard");
+            } else {
+                // It's a string - remove trailing newline if present
+                size_t len = strlen(text);
+                if (len > 0 && text[len-1] == '\n') {
+                    text[len-1] = '\0';
+                }
+                sheet_set_string(state->sheet, state->cursor_row, state->cursor_col, text);
+                strcpy_s(state->status_message, sizeof(state->status_message), "Text pasted from system clipboard");
+            }
+        }
+        free(text);
+    } else {
+        strcpy_s(state->status_message, sizeof(state->status_message), "Failed to get system clipboard content");
+    }
+}
+
+// System clipboard helper functions
+BOOL set_system_clipboard_text(const char* text) {
+    if (!OpenClipboard(NULL)) return FALSE;
+    
+    EmptyClipboard();
+    
+    size_t len = strlen(text) + 1;
+    HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, len);
+    if (!hMem) {
+        CloseClipboard();
+        return FALSE;
+    }
+    
+    char* pMem = (char*)GlobalLock(hMem);
+    if (pMem) {
+        strcpy_s(pMem, len, text);
+        GlobalUnlock(hMem);
+        SetClipboardData(CF_TEXT, hMem);
+    }
+    
+    CloseClipboard();
+    return TRUE;
+}
+
+char* get_system_clipboard_text(void) {
+    if (!OpenClipboard(NULL)) return NULL;
+    
+    HANDLE hData = GetClipboardData(CF_TEXT);
+    if (!hData) {
+        CloseClipboard();
+        return NULL;
+    }
+    
+    char* pData = (char*)GlobalLock(hData);
+    if (!pData) {
+        CloseClipboard();
+        return NULL;
+    }
+    
+    size_t len = strlen(pData) + 1;
+    char* result = (char*)malloc(len);
+    if (result) {
+        strcpy_s(result, len, pData);
+    }
+    
+    GlobalUnlock(hData);
+    CloseClipboard();
+    return result;
+}
+
 // Handle keyboard input
 void app_handle_input(AppState* state, KeyEvent* key) {
     if (state->mode == MODE_NORMAL) {
@@ -460,21 +574,25 @@ void app_handle_input(AppState* state, KeyEvent* key) {
                     break;
                 case '"':
                     app_start_input(state, MODE_INSERT_STRING);
-                    break;
-                case ':':
+                    break;                case ':':
                     app_start_input(state, MODE_COMMAND);
-                    break;                case 'x':
+                    break;
+                case 'x':
                     sheet_clear_cell(state->sheet, state->cursor_row, state->cursor_col);
                     sheet_recalculate(state->sheet);
                     strcpy_s(state->status_message, sizeof(state->status_message), "Cell cleared");
                     break;
                 case 'c':
-                    if (key->ctrl) {
+                    if (key->ctrl && key->shift) {
+                        app_copy_to_system_clipboard(state);
+                    } else if (key->ctrl) {
                         app_copy_cell(state);
                     }
                     break;
                 case 'v':
-                    if (key->ctrl) {
+                    if (key->ctrl && key->shift) {
+                        app_paste_from_system_clipboard(state);
+                    } else if (key->ctrl) {
                         app_paste_cell(state);
                     }
                     break;
