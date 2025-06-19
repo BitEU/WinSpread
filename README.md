@@ -86,7 +86,7 @@ A powerful, vi-style spreadsheet application that runs entirely in the Windows t
 
 2. **Build using the provided script:**
    ```cmd
-   build.bat
+   .\build.bat
    ```
 
 3. **Run the application:**
@@ -122,8 +122,6 @@ A powerful, vi-style spreadsheet application that runs entirely in the Windows t
 
 ### Command Mode
 - **`:q`** or **`:quit`** - Quit application
-- **`:w`** - Save (not yet implemented)
-- **`:wq`** - Save and quit
 
 ## CSV File Operations
 
