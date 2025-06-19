@@ -31,10 +31,11 @@ typedef struct Cell {
     CellType type;
     union {
         double number;
-        char* string;
-        struct {
+        char* string;        struct {
             char* expression;
             double cached_value;
+            char* cached_string;    // For IF function string results
+            int is_string_result;   // Flag indicating if result is a string
             ErrorType error;
         } formula;
     } data;
@@ -199,12 +200,16 @@ Cell* cell_new(int row, int col) {
 
 void cell_free(Cell* cell) {
     if (!cell) return;
-    
-    // Free string data
+      // Free string data
     if (cell->type == CELL_STRING && cell->data.string) {
         free(cell->data.string);
-    } else if (cell->type == CELL_FORMULA && cell->data.formula.expression) {
-        free(cell->data.formula.expression);
+    } else if (cell->type == CELL_FORMULA) {
+        if (cell->data.formula.expression) {
+            free(cell->data.formula.expression);
+        }
+        if (cell->data.formula.cached_string) {
+            free(cell->data.formula.cached_string);
+        }
     }
     
     // Free dependency arrays
@@ -216,14 +221,19 @@ void cell_free(Cell* cell) {
 
 void cell_clear(Cell* cell) {
     if (!cell) return;
-    
-    // Free existing data
+      // Free existing data
     if (cell->type == CELL_STRING && cell->data.string) {
         free(cell->data.string);
         cell->data.string = NULL;
-    } else if (cell->type == CELL_FORMULA && cell->data.formula.expression) {
-        free(cell->data.formula.expression);
-        cell->data.formula.expression = NULL;
+    } else if (cell->type == CELL_FORMULA) {
+        if (cell->data.formula.expression) {
+            free(cell->data.formula.expression);
+            cell->data.formula.expression = NULL;
+        }
+        if (cell->data.formula.cached_string) {
+            free(cell->data.formula.cached_string);
+            cell->data.formula.cached_string = NULL;
+        }
     }
     
     cell->type = CELL_EMPTY;
@@ -248,11 +258,12 @@ void cell_set_string(Cell* cell, const char* str) {
 
 void cell_set_formula(Cell* cell, const char* formula) {
     if (!cell) return;
-    
-    cell_clear(cell);
+      cell_clear(cell);
     cell->type = CELL_FORMULA;
     cell->data.formula.expression = _strdup(formula);
     cell->data.formula.cached_value = 0.0;
+    cell->data.formula.cached_string = NULL;
+    cell->data.formula.is_string_result = 0;
     cell->data.formula.error = ERROR_NONE;
 }
 
@@ -308,8 +319,7 @@ char* cell_get_display_value(Cell* cell) {
             
         case CELL_STRING:
             return cell->data.string;
-            
-        case CELL_FORMULA:
+              case CELL_FORMULA:
             if (cell->data.formula.error != ERROR_NONE) {
                 switch (cell->data.formula.error) {
                     case ERROR_DIV_ZERO: return "#DIV/0!";
@@ -319,6 +329,13 @@ char* cell_get_display_value(Cell* cell) {
                     default: return "#ERROR!";
                 }
             }
+            
+            // Check if this formula has a string result (from IF function)
+            if (cell->data.formula.is_string_result && cell->data.formula.cached_string) {
+                return cell->data.formula.cached_string;
+            }
+            
+            // Otherwise format as number
             snprintf(buffer, sizeof(buffer), "%.*f", cell->precision, cell->data.formula.cached_value);
             // Remove trailing zeros
             dot = strchr(buffer, '.');
@@ -412,6 +429,11 @@ double parse_factor(Sheet* sheet, const char** expr, ErrorType* error);
 double parse_function(Sheet* sheet, const char** expr, ErrorType* error);
 void skip_whitespace(const char** expr);
 
+// Global variables for IF function string results
+extern char g_if_result_string[256];
+extern int g_if_result_is_string;
+extern Cell* g_current_evaluating_cell;
+
 // Range parsing structures
 typedef struct {
     int start_row, start_col;
@@ -429,6 +451,8 @@ double func_min(const double* values, int count);
 double func_median(double* values, int count);
 double func_mode(const double* values, int count);
 double func_if(double condition, double true_val, double false_val);
+double func_if_enhanced(double condition, double true_val, double false_val, 
+                       const char* true_str, const char* false_str);
 double func_power(double base, double exponent);
 
 // Parse range notation like "A1:A3" or "B2:D5"
@@ -587,6 +611,61 @@ double func_mode(const double* values, int count) {
 
 double func_if(double condition, double true_val, double false_val) {
     return (condition != 0.0) ? true_val : false_val;
+}
+
+// Global variables for IF function string results
+char g_if_result_string[256] = {0};
+int g_if_result_is_string = 0;
+Cell* g_current_evaluating_cell = NULL;  // Track current cell during evaluation
+
+double func_if_enhanced(double condition, double true_val, double false_val, 
+                       const char* true_str, const char* false_str) {
+    // Reset global string result flag
+    g_if_result_is_string = 0;
+    g_if_result_string[0] = '\0';
+    
+    // Also reset the current cell's string result
+    if (g_current_evaluating_cell) {
+        if (g_current_evaluating_cell->data.formula.cached_string) {
+            free(g_current_evaluating_cell->data.formula.cached_string);
+            g_current_evaluating_cell->data.formula.cached_string = NULL;
+        }
+        g_current_evaluating_cell->data.formula.is_string_result = 0;
+    }
+    
+    if (condition != 0.0) {
+        // True condition
+        if (true_str) {
+            strcpy_s(g_if_result_string, sizeof(g_if_result_string), true_str);
+            g_if_result_is_string = 1;
+            
+            // Store in current cell if available
+            if (g_current_evaluating_cell) {
+                g_current_evaluating_cell->data.formula.cached_string = _strdup(true_str);
+                g_current_evaluating_cell->data.formula.is_string_result = 1;
+            }
+            
+            return 1.0; // Return non-zero to indicate string result available
+        } else {
+            return true_val;
+        }
+    } else {
+        // False condition
+        if (false_str) {
+            strcpy_s(g_if_result_string, sizeof(g_if_result_string), false_str);
+            g_if_result_is_string = 1;
+            
+            // Store in current cell if available
+            if (g_current_evaluating_cell) {
+                g_current_evaluating_cell->data.formula.cached_string = _strdup(false_str);
+                g_current_evaluating_cell->data.formula.is_string_result = 1;
+            }
+            
+            return 0.0; // Return zero to indicate string result available
+        } else {
+            return false_val;
+        }
+    }
 }
 
 double func_power(double base, double exponent) {
@@ -966,33 +1045,72 @@ double parse_function(Sheet* sheet, const char** expr, ErrorType* error) {
         }
         (*expr)++; // Skip closing parenthesis
         
-        return func_power(base, exponent);
-        
-    } else if (strcmp(func_name, "IF") == 0) {
+        return func_power(base, exponent);      } else if (strcmp(func_name, "IF") == 0) {
         // IF function: IF(condition, true_value, false_value)
+        // Enhanced to support string literals and string comparisons
         skip_whitespace(expr);
         
-        // Parse condition
-        double condition = evaluate_comparison(sheet, *expr, error);
-        if (*error != ERROR_NONE) return 0.0;
-        
-        // Find comma after condition
+        // Extract the entire condition expression more carefully
+        const char* condition_start = *expr;
         int paren_count = 0;
-        const char* p = *expr;
-        while (*p && (paren_count > 0 || *p != ',')) {
-            if (*p == '(') paren_count++;
-            else if (*p == ')') paren_count--;
-            p++;
+        const char* condition_end = *expr;
+        
+        // Find the comma that separates condition from true_value
+        while (*condition_end && (paren_count > 0 || *condition_end != ',')) {
+            if (*condition_end == '(') paren_count++;
+            else if (*condition_end == ')') paren_count--;
+            condition_end++;
         }
-        if (*p != ',') {
+        
+        if (*condition_end != ',') {
             *error = ERROR_PARSE;
             return 0.0;
         }
-        *expr = p + 1; // Skip comma
         
-        // Parse true value
-        double true_val = parse_arithmetic_expression(sheet, expr, error);
+        // Extract condition string
+        int condition_len = (int)(condition_end - condition_start);
+        char condition_expr[256];
+        if (condition_len >= sizeof(condition_expr)) {
+            *error = ERROR_PARSE;
+            return 0.0;
+        }
+        
+        strncpy_s(condition_expr, sizeof(condition_expr), condition_start, condition_len);
+        condition_expr[condition_len] = '\0';
+        
+        // Evaluate the condition
+        double condition = evaluate_comparison(sheet, condition_expr, error);
         if (*error != ERROR_NONE) return 0.0;
+        
+        // Move past the comma
+        *expr = condition_end + 1;
+        
+        // Enhanced parsing for true value (can be string or number)
+        skip_whitespace(expr);
+        double true_val = 0.0;
+        char true_str[256] = {0};
+        int is_true_string = 0;
+        
+        if (**expr == '"') {
+            // Parse string literal
+            (*expr)++; // Skip opening quote
+            int i = 0;
+            while (**expr && **expr != '"' && i < 255) {
+                true_str[i++] = **expr;
+                (*expr)++;
+            }
+            if (**expr == '"') {
+                (*expr)++; // Skip closing quote
+                is_true_string = 1;
+            } else {
+                *error = ERROR_PARSE;
+                return 0.0;
+            }
+        } else {
+            // Parse as numeric expression
+            true_val = parse_arithmetic_expression(sheet, expr, error);
+            if (*error != ERROR_NONE) return 0.0;
+        }
         
         skip_whitespace(expr);
         if (**expr != ',') {
@@ -1001,9 +1119,32 @@ double parse_function(Sheet* sheet, const char** expr, ErrorType* error) {
         }
         (*expr)++; // Skip comma
         
-        // Parse false value
-        double false_val = parse_arithmetic_expression(sheet, expr, error);
-        if (*error != ERROR_NONE) return 0.0;
+        // Enhanced parsing for false value (can be string or number)
+        skip_whitespace(expr);
+        double false_val = 0.0;
+        char false_str[256] = {0};
+        int is_false_string = 0;
+        
+        if (**expr == '"') {
+            // Parse string literal
+            (*expr)++; // Skip opening quote
+            int i = 0;
+            while (**expr && **expr != '"' && i < 255) {
+                false_str[i++] = **expr;
+                (*expr)++;
+            }
+            if (**expr == '"') {
+                (*expr)++; // Skip closing quote
+                is_false_string = 1;
+            } else {
+                *error = ERROR_PARSE;
+                return 0.0;
+            }
+        } else {
+            // Parse as numeric expression
+            false_val = parse_arithmetic_expression(sheet, expr, error);
+            if (*error != ERROR_NONE) return 0.0;
+        }
         
         skip_whitespace(expr);
         if (**expr != ')') {
@@ -1011,7 +1152,11 @@ double parse_function(Sheet* sheet, const char** expr, ErrorType* error) {
             return 0.0;
         }
         (*expr)++; // Skip closing parenthesis
-          return func_if(condition, true_val, false_val);
+        
+        // Handle the IF logic with string support
+        return func_if_enhanced(condition, true_val, false_val, 
+                               is_true_string ? true_str : NULL,
+                               is_false_string ? false_str : NULL);
     }
     
     *error = ERROR_PARSE;
@@ -1029,9 +1174,117 @@ double evaluate_formula(Sheet* sheet, const char* formula, ErrorType* error) {
     return evaluate_comparison(sheet, formula, error);
 }
 
-// Evaluate comparison expressions (>, <, >=, <=, =, <>)
+// Helper function to get string value from a cell reference
+char* get_cell_string_value(Sheet* sheet, const char* ref) {
+    int row, col;
+    if (!parse_cell_reference(ref, &row, &col)) {
+        return NULL;
+    }
+    
+    Cell* cell = sheet_get_cell(sheet, row, col);
+    if (!cell) return NULL;
+    
+    switch (cell->type) {
+        case CELL_STRING:
+            return cell->data.string;
+        case CELL_FORMULA:
+            if (cell->data.formula.is_string_result && cell->data.formula.cached_string) {
+                return cell->data.formula.cached_string;
+            }
+            break;
+        default:
+            break;
+    }
+    return NULL;
+}
+
+// Enhanced comparison evaluation with string support
 double evaluate_comparison(Sheet* sheet, const char* expr, ErrorType* error) {
     const char* p = expr;
+    const char* start_left = p;
+    
+    // First, try to identify if we have a string comparison
+    // Look for pattern: cell_ref = "string" or "string" = cell_ref
+    
+    // Check if left side is a cell reference
+    char left_ref[32] = {0};
+    int left_ref_len = 0;
+    const char* temp_p = p;
+    
+    // Extract potential cell reference
+    while (*temp_p && (isalpha(*temp_p) || isdigit(*temp_p)) && left_ref_len < 31) {
+        left_ref[left_ref_len++] = *temp_p;
+        temp_p++;
+    }
+    left_ref[left_ref_len] = '\0';
+    
+    // Check if it's a valid cell reference
+    int is_left_cell_ref = 0;
+    int left_row, left_col;
+    if (left_ref_len > 0 && parse_cell_reference(left_ref, &left_row, &left_col)) {
+        is_left_cell_ref = 1;
+    }
+    
+    // Skip whitespace and look for comparison operator
+    skip_whitespace(&temp_p);
+    char comparison_op[3] = {0};
+    int op_len = 0;
+    
+    if (*temp_p == '=' || *temp_p == '<' || *temp_p == '>') {
+        comparison_op[op_len++] = *temp_p++;
+        if (*temp_p == '=' || (*temp_p == '>' && comparison_op[0] == '<')) {
+            comparison_op[op_len++] = *temp_p++;
+        }
+        comparison_op[op_len] = '\0';
+    }
+    
+    // Check if right side is a string literal
+    skip_whitespace(&temp_p);
+    int is_right_string = (*temp_p == '"');
+    
+    // If we have cell_ref = "string", handle as string comparison
+    if (is_left_cell_ref && strlen(comparison_op) > 0 && is_right_string) {
+        // Get the string value from the cell
+        char* left_str = get_cell_string_value(sheet, left_ref);
+        
+        // Parse the string literal
+        temp_p++; // Skip opening quote
+        char right_str[256] = {0};
+        int right_len = 0;
+        while (*temp_p && *temp_p != '"' && right_len < 255) {
+            right_str[right_len++] = *temp_p++;
+        }
+        if (*temp_p == '"') temp_p++; // Skip closing quote
+        
+        // Perform string comparison
+        int cmp_result = 0;
+        if (left_str) {
+            cmp_result = strcmp(left_str, right_str);
+        } else {
+            // If cell is empty or not string, compare with empty string
+            cmp_result = strcmp("", right_str);
+        }
+        
+        // Apply comparison operator
+        if (strcmp(comparison_op, "=") == 0) {
+            return (cmp_result == 0) ? 1.0 : 0.0;
+        } else if (strcmp(comparison_op, "<>") == 0) {
+            return (cmp_result != 0) ? 1.0 : 0.0;
+        } else if (strcmp(comparison_op, "<") == 0) {
+            return (cmp_result < 0) ? 1.0 : 0.0;
+        } else if (strcmp(comparison_op, "<=") == 0) {
+            return (cmp_result <= 0) ? 1.0 : 0.0;
+        } else if (strcmp(comparison_op, ">") == 0) {
+            return (cmp_result > 0) ? 1.0 : 0.0;
+        } else if (strcmp(comparison_op, ">=") == 0) {
+            return (cmp_result >= 0) ? 1.0 : 0.0;
+        }
+        
+        *error = ERROR_PARSE;
+        return 0.0;
+    }
+    
+    // Fall back to numeric comparison
     double left = parse_arithmetic_expression(sheet, &p, error);
     if (*error != ERROR_NONE) return left;
     
@@ -1107,13 +1360,14 @@ void sheet_recalculate(Sheet* sheet) {
     // TODO: Implement proper dependency tracking and topological sort
     
     for (int row = 0; row < sheet->rows; row++) {
-        for (int col = 0; col < sheet->cols; col++) {
-            Cell* cell = sheet_get_cell(sheet, row, col);
+        for (int col = 0; col < sheet->cols; col++) {            Cell* cell = sheet_get_cell(sheet, row, col);
             if (cell && cell->type == CELL_FORMULA) {
                 ErrorType error;
+                g_current_evaluating_cell = cell;  // Set global context
                 double value = evaluate_formula(sheet, cell->data.formula.expression, &error);
                 cell->data.formula.cached_value = value;
                 cell->data.formula.error = error;
+                g_current_evaluating_cell = NULL;   // Clear global context
             }
         }
     }
