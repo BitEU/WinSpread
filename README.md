@@ -569,7 +569,8 @@ WinSpread/
 ├── sheet.h         # Spreadsheet engine and formula parser
 ├── console.h       # Windows console wrapper and input handling
 ├── compat.h        # Compatibility definitions
-├── debug.h        # Manages debugging log
+├── debug.h         # Manages debugging log
+├── charts.h         # Generates charts
 ├── build.bat       # Build script for Windows
 ├── LICENSE         # GPL v3 license
 └── README.md       # This file
