@@ -313,11 +313,63 @@ BOOL console_get_key(Console* con, KeyEvent* key) {
                 return TRUE;            } else if (keyEvent->wVirtualKeyCode == VK_F1) {
                 key->type = 1;
                 key->key.special = KEY_F1;
-                return TRUE;            } else if (keyEvent->wVirtualKeyCode >= 'A' && keyEvent->wVirtualKeyCode <= 'Z' && key->ctrl) {
+                return TRUE;
+            } else if (keyEvent->wVirtualKeyCode >= 'A' && keyEvent->wVirtualKeyCode <= 'Z' && key->ctrl) {
                 // Handle Ctrl+letter combinations (with or without Shift)
                 key->type = 0;
                 key->key.ch = (char)keyEvent->wVirtualKeyCode + ('a' - 'A'); // Convert to lowercase
                 return TRUE;
+            } else if (key->ctrl && key->shift) {
+                // Handle Ctrl+Shift+number combinations for formatting
+                switch (keyEvent->wVirtualKeyCode) {
+                    case '1':
+                        key->type = 0;
+                        key->key.ch = '1';
+                        return TRUE;
+                    case '3':
+                        key->type = 0;
+                        key->key.ch = '3';
+                        return TRUE;
+                    case '4':
+                        key->type = 0;
+                        key->key.ch = '4';
+                        return TRUE;
+                    case '5':
+                        key->type = 0;
+                        key->key.ch = '5';
+                        return TRUE;
+                }
+            } else if (key->ctrl) {
+                // Handle Ctrl+symbol combinations
+                switch (keyEvent->wVirtualKeyCode) {
+                    case '5':  // Ctrl+5 for %
+                        if (key->shift) {
+                            key->type = 0;
+                            key->key.ch = '%';
+                            return TRUE;
+                        }
+                        break;
+                    case '4':  // Ctrl+4 for $
+                        if (key->shift) {
+                            key->type = 0;
+                            key->key.ch = '$';
+                            return TRUE;
+                        }
+                        break;
+                    case '3':  // Ctrl+3 for #
+                        if (key->shift) {
+                            key->type = 0;
+                            key->key.ch = '#';
+                            return TRUE;
+                        }
+                        break;
+                }
+                // Also handle when the character is already the symbol
+                if (keyEvent->uChar.AsciiChar != 0) {
+                    key->type = 0;
+                    key->key.ch = keyEvent->uChar.AsciiChar;
+                    return TRUE;
+                }
             } else if (keyEvent->uChar.AsciiChar != 0) {
                 // Regular character
                 key->type = 0;

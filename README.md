@@ -22,8 +22,9 @@ A powerful, vi-style spreadsheet application that runs entirely in the Windows t
   - [Command Mode](#command-mode)
 - [CSV File Operations](#csv-file-operations)
   - [Saving to CSV](#saving-to-csv)
+    - [CSV Format Options](#csv-format-options)
   - [Loading from CSV](#loading-from-csv)
-  - [CSV Format Options](#csv-format-options)
+  - [CSV Format Compatibility](#csv-format-compatibility)
 - [Functions](#functions)
   - [1. SUM Function](#1-sum-function)
   - [2. AVG Function](#2-avg-function)
@@ -33,12 +34,22 @@ A powerful, vi-style spreadsheet application that runs entirely in the Windows t
   - [6. MODE Function](#6-mode-function)
   - [7. IF Function](#7-if-function)
   - [8. POWER Function](#8-power-function)
+  - [9. VLOOKUP Function](#9-vlookup-function)
   - [Mathematical Operators](#mathematical-operators)
   - [Range Notation](#range-notation)
+- [Data Formatting](#data-formatting)
+  - [Supported Format Types](#supported-format-types)
+    - [1. General Format (Default)](#1-general-format-default)
+    - [2. Percentage Format](#2-percentage-format)
+    - [3. Currency Format](#3-currency-format)
+    - [4. Date and Time Formats](#4-date-and-time-formats)
+    - [5. Cell Color Formatting](#5-cell-color-formatting)
+    - [6. Dynamic Column and Row Resizing](#6-dynamic-column-and-row-resizing)
+  - [Format Application](#format-application)
+  - [Format Persistence](#format-persistence)
 - [File Structure](#file-structure)
 - [Architecture](#architecture)
   - [Core Components](#core-components)
-  - [Key Features](#key-features)
 - [Error Handling](#error-handling)
 - [Future Enhancements](#future-enhancements)
 - [Contributing](#contributing)
@@ -59,13 +70,19 @@ A powerful, vi-style spreadsheet application that runs entirely in the Windows t
 ### Supported Functions
 - **Mathematical**: `SUM`, `AVG`, `MAX`, `MIN`, `MEDIAN`, `MODE`, `POWER`
 - **Conditional**: `IF(condition, true_value, false_value)`
+- **Lookup**: `VLOOKUP(lookup_value, table_array, col_index, [exact_match])`
 - **Operators**: `+`, `-`, `*`, `/`, `>`, `<`, `>=`, `<=`, `=`, `<>`
 - **Cell ranges**: `A1:A10`, `B1:C5` for aggregate functions
 
 ### Advanced Features
 - **Copy/Paste**: Full cell copying with `Ctrl+C` and `Ctrl+V`
+- **Range Operations**: Select, copy, and paste entire ranges of cells
+- **Data Formatting**: Professional formatting options for numbers, dates, and currency
+- **Cell Color Formatting**: Customizable text and background colors with 8 preset colors or hex values
+- **Dynamic Column/Row Resizing**: Adjustable column widths and row heights using Alt+Arrow keys
+- **Multi-Cell Resizing**: Resize multiple columns or rows simultaneously using range selection
 - **Formula dependencies**: Automatic dependency tracking and recalculation
-- **Error handling**: Division by zero, reference errors, and parse errors
+- **Error handling**: Division by zero, reference errors, parse errors, and lookup errors
 - **Cell formatting**: Width, precision, and alignment support
 - **Command mode**: Vi-style commands for advanced operations
 
@@ -118,10 +135,52 @@ A powerful, vi-style spreadsheet application that runs entirely in the Windows t
 - **`Ctrl+V`** - Paste copied cell (internal)
 - **`Ctrl+Shift+C`** - Copy current cell (external)
 - **`Ctrl+Shift+V`** - Paste copied cell (external)
+- **Range Selection**: 
+  - **`Shift+Arrow keys`** - Select cell ranges
+  - **`Shift+C`** - Copy selected range
+  - **`Shift+V`** - Paste range at current position
+- **Data Formatting**:
+  - **`Ctrl+Shift+1`** - Format as number
+  - **`Ctrl+Shift+3`** - Cycle through date/time formats (13 different options)
+  - **`Ctrl+Shift+4`** - Format as currency
+  - **`Ctrl+Shift+5`** - Format as percentage
+- **NEW: Column and Row Resizing**:
+  - **`Alt+Left Arrow`** - Decrease column width
+  - **`Alt+Right Arrow`** - Increase column width
+  - **`Alt+Up Arrow`** - Decrease row height
+  - **`Alt+Down Arrow`** - Increase row height
+  - **Works with range selection** - Resize multiple columns/rows at once
 - **`Ctrl+Q`** - Quick quit
 
 ### Command Mode
 - **`:q`** or **`:quit`** - Quit application
+
+**Formatting Commands:**
+- **`:format general`** - Apply general number formatting
+- **`:format percentage`** - Apply percentage formatting
+- **`:format currency`** - Apply currency formatting
+- **`:format date`** - Apply date formatting (MM/DD/YYYY)
+- **`:format date dd/mm/yyyy`** - Apply European date formatting
+- **`:format date yyyy-mm-dd`** - Apply ISO date formatting
+- **`:format time`** - Apply 12-hour time formatting
+- **`:format time 24hr`** - Apply 24-hour time formatting
+- **`:format time seconds`** - Apply time formatting with seconds
+
+**NEW: Color Commands:**
+- **`:clrtx <color>`** - Set text color (e.g., `:clrtx red`, `:clrtx #FF0000`)
+- **`:clrbg <color>`** - Set background color (e.g., `:clrbg yellow`, `:clrbg #FFFF00`)
+
+**NEW: Range Formatting Commands:**
+- **`:range format <type>`** - Apply formatting to selected range
+  - `:range format percentage`
+  - `:range format currency`
+  - `:range format date`
+  - `:range format time`
+  - `:range format general`
+
+**Available Colors:**
+- Named colors: `black`, `blue`, `green`, `cyan`, `red`, `magenta`, `yellow`, `white`
+- Hex colors: `#000000` to `#FFFFFF` (e.g., `#FF0000` for red)
 
 ## CSV File Operations
 
@@ -295,6 +354,43 @@ WinSpread supports a comprehensive set of built-in functions for mathematical ca
 - `=POWER(A1, 0.5)` - Calculate square root of A1 (A1^0.5)
 - `=POWER(A1, 1/3)` - Calculate cube root of A1
 
+### 9. VLOOKUP Function
+**Syntax:** `=VLOOKUP(lookup_value, table_array, col_index_num, [range_lookup])`
+**Description:** Searches for a value in the first column of a table and returns a value in the same row from a specified column. Essential for data analysis and lookup operations.
+
+**Parameters:**
+- `lookup_value` - The value to search for (can be number, string, or cell reference)
+- `table_array` - The range containing the lookup table (e.g., "A1:D10")
+- `col_index_num` - Column number in the table to return value from (1 = first column)
+- `range_lookup` - Optional: 0 for exact match, 1 for approximate match (default)
+
+**Examples:**
+- `=VLOOKUP("Apple", A1:C10, 2, 0)` - Find "Apple" in column A, return value from column B
+- `=VLOOKUP(B1, D1:F100, 3, 0)` - Look up value in B1, return from 3rd column of table
+- `=VLOOKUP(1001, A1:E50, 2, 1)` - Approximate match lookup for employee ID
+- `=VLOOKUP("Product X", Products!A:D, 4, 0)` - Exact match with descriptive range name
+
+**Lookup Table Example:**
+```
+    A        B       C       D
+1   Item     Price   Stock   Category
+2   Apple    1.20    50      Fruit
+3   Banana   0.80    30      Fruit  
+4   Carrot   0.60    25      Vegetable
+5   Donut    2.50    15      Bakery
+```
+
+**VLOOKUP Examples with this table:**
+- `=VLOOKUP("Apple", A1:D5, 2, 0)` → Returns `1.20` (price of Apple)
+- `=VLOOKUP("Banana", A1:D5, 3, 0)` → Returns `30` (stock of Banana)
+- `=VLOOKUP("Carrot", A1:D5, 4, 0)` → Returns `"Vegetable"` (category of Carrot)
+- `=VLOOKUP("Orange", A1:D5, 2, 0)` → Returns `#N/A!` (Orange not found)
+
+**Error Handling:**
+- **`#N/A!`** - Lookup value not found in first column
+- **`#REF!`** - Invalid table range or column index out of bounds
+- **`#VALUE!`** - Invalid parameters or data type mismatch
+
 ### Mathematical Operators
 
 **Arithmetic Operators:**
@@ -322,6 +418,146 @@ WinSpread supports a comprehensive set of built-in functions for mathematical ca
 - Single row: `=AVG(A1:Z1)`
 - Rectangle: `=MAX(A1:E10)`
 - Large range: `=MIN(A1:Z100)`
+
+## Data Formatting
+
+WinSpread now supports professional data formatting options to enhance the appearance and readability of your spreadsheets. Formatting is applied to individual cells and preserved during copy/paste operations.
+
+### Supported Format Types
+
+#### 1. General Format (Default)
+**Description:** Standard numeric display with automatic decimal precision.
+**Example:** `1234.56789` displays as `1234.57` (with 2 decimal precision)
+
+#### 2. Percentage Format
+**Keyboard Shortcut:** `Ctrl+Shift+5`
+**Description:** Displays numbers as percentages with the % symbol.
+**Examples:**
+- `0.1234` displays as `12.34%`
+- `0.5` displays as `50.00%`
+- `1.25` displays as `125.00%`
+
+#### 3. Currency Format
+**Keyboard Shortcut:** `Ctrl+Shift+4`
+**Description:** Displays numbers as currency with $ symbol and proper negative formatting.
+**Examples:**
+- `1234.56` displays as `$1234.56`
+- `-500.00` displays as `-$500.00`
+- `0` displays as `$0.00`
+
+#### 4. Date and Time Formats
+
+**Keyboard Shortcut:** `Ctrl+Shift+3` (cycles through all date/time formats)
+**Description:** Displays numbers as dates and times using Excel-style serial date system. Pressing the shortcut repeatedly cycles through all available formats.
+
+**Available Formats:**
+
+**Date Formats:**
+- **MM/DD/YYYY**: `12/25/2023` (American format)
+- **DD/MM/YYYY**: `25/12/2023` (European format)  
+- **YYYY-MM-DD**: `2023-12-25` (ISO format)
+- **MM/DD/YY**: `12/25/23` (Short date)
+- **Mon DD, YYYY**: `Dec 25, 2023` (Long format with month name)
+- **DD Mon YYYY**: `25 Dec 2023` (European long format)
+
+**Time Formats:**
+- **12-Hour**: `2:30 PM`, `11:45 AM`
+- **24-Hour**: `14:30`, `23:45`
+- **With Seconds**: `14:30:45`, `09:15:30`
+- **12-Hour with Seconds**: `2:30:45 PM`, `11:45:30 AM`
+
+**DateTime Formats:**
+- **Short DateTime**: `12/25/23 2:30 PM`
+- **Long DateTime**: `Dec 25, 2023 2:30:45 PM`
+- **ISO 8601**: `2023-12-25T14:30:45`
+
+**Examples:**
+- `44927` displays as `12/25/2023` (Excel serial date)
+- `45000` displays as `04/13/2024`
+- `44927.5` displays as `12/25/2023 12:00 PM`
+- `45000.75` displays as `04/13/2024 6:00 PM`
+- `0.5` displays as `12:00 PM` (noon)
+- `0.75` displays as `6:00 PM`
+- `0.25` displays as `6:00 AM`
+
+**Usage:** Simply press `Ctrl+Shift+3` repeatedly to cycle through all 13 different date/time formatting options. The current format will be displayed in the status bar.
+
+#### 5. Cell Color Formatting
+
+**Description** WinSpread now supports customizable text and background colors for individual cells or ranges of cells.
+
+**Command Syntax:**
+- **Text Color**: `:clrtx <color>` - Sets the text (foreground) color
+- **Background Color**: `:clrbg <color>` - Sets the background color
+
+**Supported Colors:**
+- **Named Colors**: `black`, `blue`, `green`, `cyan`, `red`, `magenta`, `yellow`, `white`
+- **Hex Colors**: `#000000` (black), `#FF0000` (red), `#00FF00` (green), `#0000FF` (blue), `#FFFFFF` (white), etc.
+
+**Examples:**
+```
+:clrtx red          # Set text color to red
+:clrbg yellow       # Set background color to yellow
+:clrtx #FF0000      # Set text color to red using hex
+:clrbg #FFFF00      # Set background color to yellow using hex
+```
+
+**Range Application:**
+- Select a range of cells using `Shift+Arrow keys`
+- Apply color commands to the entire selected range
+- Individual cells can have different colors
+
+#### 6. Dynamic Column and Row Resizing
+
+**Description** Adjust column widths and row heights dynamically using Alt+Arrow keys.
+
+**Keyboard Shortcuts:**
+- **Alt+Left Arrow**: Decrease column width
+- **Alt+Right Arrow**: Increase column width  
+- **Alt+Up Arrow**: Decrease row height
+- **Alt+Down Arrow**: Increase row height
+
+**Range Resizing:**
+- Select multiple columns/rows using `Shift+Arrow keys`
+- Use Alt+Arrow keys to resize all selected columns/rows simultaneously
+- Minimum column width: 1 character
+- Maximum column width: 50 characters
+- Minimum row height: 1 line
+- Maximum row height: 10 lines
+
+**Examples:**
+- Position cursor on column C, press `Alt+Right` to make column C wider
+- Select range A1:D10, press `Alt+Left` to make columns A-D narrower
+- Select range A1:A10, press `Alt+Down` to make rows 1-10 taller
+- Select range A1:E5, press `Alt+Up` to make rows 1-5 shorter
+
+### Format Application
+
+**Via Keyboard Shortcuts:**
+```
+Ctrl+Shift+1 - Apply number formatting
+Ctrl+Shift+3 - Cycle through all date/time formats (13 different formats)
+Ctrl+Shift+4 - Apply currency formatting (Excel-style)
+Ctrl+Shift+5 - Apply percentage formatting (Excel-style)
+```
+
+**Via Command Mode:**
+```
+:format general     - Apply general number formatting
+:format percentage  - Apply percentage formatting
+:format currency    - Apply currency formatting
+:format date        - Apply date formatting
+:format time        - Apply time formatting
+:clrtx <color>      - Set text color
+:clrbg <color>      - Set background color
+```
+
+### Format Persistence
+
+- **Copy/Paste**: Formatting is preserved when copying cells or ranges
+- **CSV Export**: Formatting is preserved in "preserve mode" CSV exports
+- **Cell Clearing**: Clearing cell content (`x` key) preserves formatting
+- **Value Changes**: Changing cell values maintains existing formatting
 
 ## File Structure
 
@@ -358,29 +594,28 @@ WinSpread/
    - Keyboard input handling
    - Color and cursor management
 
-### Key Features
-
-- **Memory efficient**: Uses sparse matrix for cell storage
-- **Fast rendering**: Double-buffered display with only changed cells updated
-- **Robust parsing**: Recursive descent parser for complex formulas
-- **Dependency tracking**: Automatic recalculation when referenced cells change
-
 ## Error Handling
 
-WinSpread provides comprehensive error handling:
+WinSpread provides comprehensive error handling with clear error messages:
 
 - **`#DIV/0!`** - Division by zero
-- **`#REF!`** - Invalid cell reference
-- **`#VALUE!`** - Invalid value or type mismatch
+- **`#REF!`** - Invalid cell reference or range
+- **`#VALUE!`** - Invalid value or type mismatch  
 - **`#PARSE!`** - Formula parsing error
+- **`#N/A!`** - Value not available (VLOOKUP not found)
+- **`#DATE!`** - Invalid date conversion
+- **Range boundary errors** - Automatic handling of out-of-bounds operations
 
 ## Future Enhancements
 
 - [ ] Undo/Redo support
-- [ ] Cell formatting (colors, borders)
-- [ ] Additional mathematical functions
+- [ ] Graph/chart generation and visualization support like how GNUPlot does it
+- [ ] Conditional formatting
+- [ ] Replace VLOOKUP with XLOOKUP
+- [ ] Deleting and inserting rows and columns
 - [ ] Search and replace
 - [ ] Sorting and filtering
+- [ ] Print preview and printing
 
 ## Contributing
 

@@ -7,6 +7,7 @@
 #include <string.h>
 #include <math.h>
 #include <ctype.h>
+#include <time.h>
 
 // Cell types
 typedef enum {
@@ -23,8 +24,38 @@ typedef enum {
     ERROR_DIV_ZERO,
     ERROR_REF,
     ERROR_VALUE,
-    ERROR_PARSE
+    ERROR_PARSE,
+    ERROR_NA
 } ErrorType;
+
+// NEW: Data formatting types
+typedef enum {
+    FORMAT_GENERAL,
+    FORMAT_NUMBER,
+    FORMAT_PERCENTAGE,
+    FORMAT_CURRENCY,
+    FORMAT_DATE,
+    FORMAT_TIME,
+    FORMAT_DATETIME
+} DataFormat;
+
+// NEW: Date/Time formatting styles
+typedef enum {
+    DATE_STYLE_MM_DD_YYYY,    // 12/25/2023
+    DATE_STYLE_DD_MM_YYYY,    // 25/12/2023  
+    DATE_STYLE_YYYY_MM_DD,    // 2023-12-25
+    DATE_STYLE_MON_DD_YYYY,   // Dec 25, 2023
+    DATE_STYLE_DD_MON_YYYY,   // 25 Dec 2023
+    DATE_STYLE_YYYY_MON_DD,   // 2023 Dec 25
+    DATE_STYLE_SHORT_DATE,    // 12/25/23
+    TIME_STYLE_12HR,          // 2:30 PM
+    TIME_STYLE_24HR,          // 14:30
+    TIME_STYLE_SECONDS,       // 14:30:45
+    TIME_STYLE_12HR_SECONDS,  // 2:30:45 PM
+    DATETIME_STYLE_SHORT,     // 12/25/23 2:30 PM
+    DATETIME_STYLE_LONG,      // Dec 25, 2023 2:30:45 PM
+    DATETIME_STYLE_ISO        // 2023-12-25T14:30:45
+} FormatStyle;
 
 // Cell structure
 typedef struct Cell {
@@ -39,11 +70,20 @@ typedef struct Cell {
             ErrorType error;
         } formula;
     } data;
-    
-    // Display properties
+      // Display properties
     int width;
     int precision;
     int align;  // 0=left, 1=center, 2=right
+      // NEW: Formatting properties
+    DataFormat format;
+    FormatStyle format_style;
+    
+    // NEW: Color formatting properties
+    int text_color;         // Foreground color (0-15 or -1 for default)
+    int background_color;   // Background color (0-15 or -1 for default)
+    
+    // NEW: Size properties
+    int row_height;         // Custom row height (-1 for default)
     
     // Dependencies
     struct Cell** depends_on;    // Cells this cell depends on
@@ -56,18 +96,36 @@ typedef struct Cell {
     int col;
 } Cell;
 
+// NEW: Range selection structure
+typedef struct {
+    int start_row, start_col;
+    int end_row, end_col;
+    int is_active;
+} RangeSelection;
+
+// NEW: Range clipboard structure
+typedef struct {
+    Cell*** cells;  // 2D array of copied cells
+    int rows, cols;
+    int is_active;
+} RangeClipboard;
+
 // Sheet structure
 typedef struct Sheet {
     Cell*** cells;      // 2D array of cell pointers
     int rows;
     int cols;
     int* col_widths;
+    int* row_heights;   // NEW: Array of row heights
     char* name;
-    
-    // Calculation state
+      // Calculation state
     int needs_recalc;
     Cell** calc_order;  // Topological sort of cells for calculation
     int calc_count;
+    
+    // NEW: Range operations
+    RangeSelection selection;
+    RangeClipboard range_clipboard;
 } Sheet;
 
 // Function prototypes
@@ -110,6 +168,37 @@ char* cell_reference_to_string(int row, int col);
 // Skip whitespace in expression
 void skip_whitespace(const char** expr);
 
+// NEW: Range copy/paste operations
+void sheet_start_range_selection(Sheet* sheet, int row, int col);
+void sheet_extend_range_selection(Sheet* sheet, int row, int col);
+void sheet_copy_range(Sheet* sheet);
+void sheet_paste_range(Sheet* sheet, int start_row, int start_col);
+void sheet_clear_range_selection(Sheet* sheet);
+int sheet_is_in_selection(Sheet* sheet, int row, int col);
+
+// NEW: Cell formatting functions
+void cell_set_format(Cell* cell, DataFormat format, FormatStyle style);
+char* format_cell_value(Cell* cell);
+char* format_number_as_percentage(double value, int precision);
+char* format_number_as_currency(double value);
+char* format_number_as_date(double value, FormatStyle style);
+char* format_number_as_time(double value, FormatStyle style);
+char* format_number_as_datetime(double value, FormatStyle date_style, FormatStyle time_style);
+char* format_number_as_enhanced_datetime(double value, FormatStyle style);
+
+// NEW: Cell color formatting functions
+void cell_set_text_color(Cell* cell, int color);
+void cell_set_background_color(Cell* cell, int color);
+int parse_color(const char* color_str);
+
+// NEW: Column/Row resizing functions
+void sheet_set_column_width(Sheet* sheet, int col, int width);
+void sheet_set_row_height(Sheet* sheet, int row, int height);
+int sheet_get_column_width(Sheet* sheet, int col);
+int sheet_get_row_height(Sheet* sheet, int row);
+void sheet_resize_columns_in_range(Sheet* sheet, int start_col, int end_col, int delta);
+void sheet_resize_rows_in_range(Sheet* sheet, int start_row, int end_row, int delta);
+
 // Implementation
 
 Sheet* sheet_new(int rows, int cols) {
@@ -138,13 +227,22 @@ Sheet* sheet_new(int rows, int cols) {
             free(sheet);
             return NULL;
         }
-    }
-    
-    // Initialize column widths
+    }    // Initialize column widths
     sheet->col_widths = (int*)calloc(cols, sizeof(int));
     for (int i = 0; i < cols; i++) {
         sheet->col_widths[i] = 10;  // Default width
     }
+    
+    // NEW: Initialize row heights
+    sheet->row_heights = (int*)calloc(rows, sizeof(int));
+    for (int i = 0; i < rows; i++) {
+        sheet->row_heights[i] = 1;  // Default height
+    }
+    
+    // NEW: Initialize range selection and clipboard
+    sheet->selection.is_active = 0;
+    sheet->range_clipboard.is_active = 0;
+    sheet->range_clipboard.cells = NULL;
     
     return sheet;
 }
@@ -159,11 +257,23 @@ void sheet_free(Sheet* sheet) {
                 cell_free(sheet->cells[i][j]);
             }
         }
-        free(sheet->cells[i]);
-    }
+        free(sheet->cells[i]);    }
     free(sheet->cells);
     
-    free(sheet->col_widths);
+    // NEW: Free range clipboard
+    if (sheet->range_clipboard.cells) {
+        for (int i = 0; i < sheet->range_clipboard.rows; i++) {
+            for (int j = 0; j < sheet->range_clipboard.cols; j++) {
+                if (sheet->range_clipboard.cells[i][j]) {
+                    cell_free(sheet->range_clipboard.cells[i][j]);
+                }
+            }
+            free(sheet->range_clipboard.cells[i]);
+        }
+        free(sheet->range_clipboard.cells);
+    }
+      free(sheet->col_widths);
+    free(sheet->row_heights);  // NEW: Free row heights
     free(sheet->name);
     free(sheet->calc_order);
     free(sheet);
@@ -190,14 +300,21 @@ Cell* sheet_get_or_create_cell(Sheet* sheet, int row, int col) {
 
 Cell* cell_new(int row, int col) {
     Cell* cell = (Cell*)calloc(1, sizeof(Cell));
-    if (!cell) return NULL;
-    
-    cell->type = CELL_EMPTY;
+    if (!cell) return NULL;    cell->type = CELL_EMPTY;
     cell->row = row;
     cell->col = col;
     cell->width = 10;
     cell->precision = 2;
     cell->align = 2;  // Right align for numbers by default
+    
+    // NEW: Initialize formatting
+    cell->format = FORMAT_GENERAL;
+    cell->format_style = 0;
+    
+    // NEW: Initialize color formatting
+    cell->text_color = -1;        // Default text color
+    cell->background_color = -1;  // Default background color
+    cell->row_height = -1;        // Default row height
     
     return cell;
 }
@@ -237,10 +354,10 @@ void cell_clear(Cell* cell) {
         if (cell->data.formula.cached_string) {
             free(cell->data.formula.cached_string);
             cell->data.formula.cached_string = NULL;
-        }
-    }
+        }    }
     
     cell->type = CELL_EMPTY;
+    // Keep formatting when clearing
 }
 
 void cell_set_number(Cell* cell, double value) {
@@ -303,59 +420,8 @@ void sheet_clear_cell(Sheet* sheet, int row, int col) {
 }
 
 char* cell_get_display_value(Cell* cell) {
-    static char buffer[256];
-    
-    if (!cell || cell->type == CELL_EMPTY) {
-        return "";
-    }
-    
-    switch (cell->type) {
-        case CELL_NUMBER:
-            snprintf(buffer, sizeof(buffer), "%.*f", cell->precision, cell->data.number);
-            // Remove trailing zeros
-            char* dot = strchr(buffer, '.');
-            if (dot) {
-                char* end = buffer + strlen(buffer) - 1;
-                while (end > dot && *end == '0') *end-- = '\0';
-                if (*end == '.') *end = '\0';
-            }
-            return buffer;
-            
-        case CELL_STRING:
-            return cell->data.string;
-              case CELL_FORMULA:
-            if (cell->data.formula.error != ERROR_NONE) {
-                switch (cell->data.formula.error) {
-                    case ERROR_DIV_ZERO: return "#DIV/0!";
-                    case ERROR_REF: return "#REF!";
-                    case ERROR_VALUE: return "#VALUE!";
-                    case ERROR_PARSE: return "#PARSE!";
-                    default: return "#ERROR!";
-                }
-            }
-            
-            // Check if this formula has a string result (from IF function)
-            if (cell->data.formula.is_string_result && cell->data.formula.cached_string) {
-                return cell->data.formula.cached_string;
-            }
-            
-            // Otherwise format as number
-            snprintf(buffer, sizeof(buffer), "%.*f", cell->precision, cell->data.formula.cached_value);
-            // Remove trailing zeros
-            dot = strchr(buffer, '.');
-            if (dot) {
-                char* end = buffer + strlen(buffer) - 1;
-                while (end > dot && *end == '0') *end-- = '\0';
-                if (*end == '.') *end = '\0';
-            }
-            return buffer;
-            
-        case CELL_ERROR:
-            return "#ERROR!";
-            
-        default:
-            return "";
-    }
+    // Use the new formatting function
+    return format_cell_value(cell);
 }
 
 char* sheet_get_display_value(Sheet* sheet, int row, int col) {
@@ -715,11 +781,15 @@ void sheet_set_clipboard_cell(Cell* cell) {
                 clipboard_cell->type = CELL_EMPTY;
                 break;
         }
-        
-        // Copy display properties
+          // Copy display properties
         clipboard_cell->width = cell->width;
         clipboard_cell->precision = cell->precision;
         clipboard_cell->align = cell->align;
+        
+        // NEW: Copy color formatting
+        clipboard_cell->text_color = cell->text_color;
+        clipboard_cell->background_color = cell->background_color;
+        clipboard_cell->row_height = cell->row_height;
     } else {
         clipboard_cell = NULL;
     }
@@ -748,422 +818,563 @@ void sheet_copy_cell(Sheet* sheet, int src_row, int src_col, int dest_row, int d
             sheet_clear_cell(sheet, dest_row, dest_col);
             break;
     }
-    
-    // Copy display properties
+      // Copy display properties
     Cell* dest_cell = sheet_get_cell(sheet, dest_row, dest_col);
     if (dest_cell) {
         dest_cell->width = src_cell->width;
         dest_cell->precision = src_cell->precision;
         dest_cell->align = src_cell->align;
+        
+        // NEW: Copy color formatting
+        dest_cell->text_color = src_cell->text_color;
+        dest_cell->background_color = src_cell->background_color;
+        dest_cell->row_height = src_cell->row_height;
     }
     
     sheet_recalculate(sheet);
 }
 
-// Parse a factor (number, cell reference, or function call)
-double parse_factor(Sheet* sheet, const char** expr, ErrorType* error) {
-    skip_whitespace(expr);
-    
-    if (**expr == '(') {
-        (*expr)++; // Skip '('
-        double result = parse_arithmetic_expression(sheet, expr, error);
-        if (*error != ERROR_NONE) return 0.0;
-        
-        skip_whitespace(expr);
-        if (**expr != ')') {
-            *error = ERROR_PARSE;
-            return 0.0;
-        }
-        (*expr)++; // Skip ')'
-        
-        return result;
+// NEW: Range selection functions
+void sheet_start_range_selection(Sheet* sheet, int row, int col) {
+    sheet->selection.start_row = row;
+    sheet->selection.start_col = col;
+    sheet->selection.end_row = row;
+    sheet->selection.end_col = col;
+    sheet->selection.is_active = 1;
+}
+
+void sheet_extend_range_selection(Sheet* sheet, int row, int col) {
+    if (sheet->selection.is_active) {
+        sheet->selection.end_row = row;
+        sheet->selection.end_col = col;
     }
+}
+
+void sheet_clear_range_selection(Sheet* sheet) {
+    sheet->selection.is_active = 0;
+}
+
+int sheet_is_in_selection(Sheet* sheet, int row, int col) {
+    if (!sheet->selection.is_active) return 0;
     
-    // Check if this could be a function call (letters followed by '(')
-    const char* start = *expr;
-    const char* lookahead = *expr;
+    int min_row = sheet->selection.start_row < sheet->selection.end_row ? 
+                  sheet->selection.start_row : sheet->selection.end_row;
+    int max_row = sheet->selection.start_row > sheet->selection.end_row ? 
+                  sheet->selection.start_row : sheet->selection.end_row;
+    int min_col = sheet->selection.start_col < sheet->selection.end_col ? 
+                  sheet->selection.start_col : sheet->selection.end_col;
+    int max_col = sheet->selection.start_col > sheet->selection.end_col ? 
+                  sheet->selection.start_col : sheet->selection.end_col;
     
-    // Look ahead to see if this is a function call
-    while (*lookahead && isalpha(*lookahead)) lookahead++;
-    skip_whitespace(&lookahead);
+    return (row >= min_row && row <= max_row && col >= min_col && col <= max_col);
+}
+
+// NEW: Copy range to clipboard
+void sheet_copy_range(Sheet* sheet) {
+    if (!sheet->selection.is_active) return;
     
-    if (*lookahead == '(') {
-        // This is a function call
-        return parse_function(sheet, expr, error);
-    }
-    
-    // Try to parse as cell reference or range
-    char ref_buf[32];
-    int i = 0;
-    
-    // Extract potential cell reference (letters followed by numbers, possibly with colon)
-    while (**expr && (isalpha(**expr) || isdigit(**expr) || **expr == ':') && i < 31) {
-        ref_buf[i++] = **expr;
-        (*expr)++;
-    }
-    ref_buf[i] = '\0';
-    
-    if (i > 0) {
-        // Check if it's a range (contains ':')
-        if (strchr(ref_buf, ':')) {
-            CellRange range;
-            if (parse_range(ref_buf, &range)) {
-                // For a range without a function, just return the sum
-                double values[1000];
-                int count = get_range_values(sheet, &range, values, 1000);
-                return func_sum(values, count);
-            } else {
-                *error = ERROR_PARSE;
-                return 0.0;
-            }
-        } else {
-            // Single cell reference
-            int row, col;
-            if (parse_cell_reference(ref_buf, &row, &col)) {
-                Cell* cell = sheet_get_cell(sheet, row, col);
-                if (!cell) {
-                    *error = ERROR_REF;
-                    return 0.0;
+    // Free existing clipboard
+    if (sheet->range_clipboard.cells) {
+        for (int i = 0; i < sheet->range_clipboard.rows; i++) {
+            for (int j = 0; j < sheet->range_clipboard.cols; j++) {
+                if (sheet->range_clipboard.cells[i][j]) {
+                    cell_free(sheet->range_clipboard.cells[i][j]);
                 }
-                
-                switch (cell->type) {
-                    case CELL_EMPTY:
-                        return 0.0;
+            }
+            free(sheet->range_clipboard.cells[i]);
+        }
+        free(sheet->range_clipboard.cells);
+    }
+    
+    // Calculate range dimensions
+    int min_row = sheet->selection.start_row < sheet->selection.end_row ? 
+                  sheet->selection.start_row : sheet->selection.end_row;
+    int max_row = sheet->selection.start_row > sheet->selection.end_row ? 
+                  sheet->selection.start_row : sheet->selection.end_row;
+    int min_col = sheet->selection.start_col < sheet->selection.end_col ? 
+                  sheet->selection.start_col : sheet->selection.end_col;
+    int max_col = sheet->selection.start_col > sheet->selection.end_col ? 
+                  sheet->selection.start_col : sheet->selection.end_col;
+    
+    int rows = max_row - min_row + 1;
+    int cols = max_col - min_col + 1;
+    
+    // Allocate clipboard
+    sheet->range_clipboard.rows = rows;
+    sheet->range_clipboard.cols = cols;
+    sheet->range_clipboard.cells = (Cell***)calloc(rows, sizeof(Cell**));
+    
+    for (int i = 0; i < rows; i++) {
+        sheet->range_clipboard.cells[i] = (Cell**)calloc(cols, sizeof(Cell*));
+    }
+    
+    // Copy cells
+    for (int i = 0; i < rows; i++) {
+        for (int j = 0; j < cols; j++) {
+            Cell* src_cell = sheet_get_cell(sheet, min_row + i, min_col + j);
+            if (src_cell) {
+                Cell* copied_cell = cell_new(min_row + i, min_col + j);
+                switch (src_cell->type) {
                     case CELL_NUMBER:
-                        return cell->data.number;
+                        cell_set_number(copied_cell, src_cell->data.number);
+                        break;
+                    case CELL_STRING:
+                        cell_set_string(copied_cell, src_cell->data.string);
+                        break;
                     case CELL_FORMULA:
-                        if (cell->data.formula.error != ERROR_NONE) {
-                            *error = cell->data.formula.error;
-                            return 0.0;
-                        }
-                        return cell->data.formula.cached_value;
+                        cell_set_formula(copied_cell, src_cell->data.formula.expression);
+                        copied_cell->data.formula.cached_value = src_cell->data.formula.cached_value;
+                        copied_cell->data.formula.error = src_cell->data.formula.error;
+                        break;
                     default:
-                        *error = ERROR_VALUE;
-                        return 0.0;
+                        break;
                 }
+                // Copy display and formatting properties
+                copied_cell->width = src_cell->width;
+                copied_cell->precision = src_cell->precision;
+                copied_cell->align = src_cell->align;
+                copied_cell->format = src_cell->format;
+                copied_cell->format_style = src_cell->format_style;
+                
+                sheet->range_clipboard.cells[i][j] = copied_cell;
             }
         }
     }
     
-    // Reset and try to parse as number
-    *expr = start;
-    char* endptr;
-    double value = strtod(*expr, &endptr);
-    if (endptr != *expr) {
-        *expr = endptr;
-        return value;
-    }
-    
-    *error = ERROR_PARSE;
-    return 0.0;
+    sheet->range_clipboard.is_active = 1;
 }
 
-// Parse term (handles * and /)
-double parse_term(Sheet* sheet, const char** expr, ErrorType* error) {
-    double result = parse_factor(sheet, expr, error);
-    if (*error != ERROR_NONE) return 0.0;
+// NEW: Paste range from clipboard
+void sheet_paste_range(Sheet* sheet, int start_row, int start_col) {
+    if (!sheet->range_clipboard.is_active) return;
     
-    while (1) {
-        skip_whitespace(expr);
-        if (**expr == '*') {
-            (*expr)++;
-            double right = parse_factor(sheet, expr, error);
-            if (*error != ERROR_NONE) return 0.0;
-            result *= right;
-        } else if (**expr == '/') {
-            (*expr)++;
-            double right = parse_factor(sheet, expr, error);
-            if (*error != ERROR_NONE) return 0.0;
-            if (right == 0.0) {
-                *error = ERROR_DIV_ZERO;
-                return 0.0;
-            }
-            result /= right;
-        } else {
-            break;
-        }
-    }
-      return result;
-}
-
-// Wrapper for backward compatibility with old API
-double parse_arithmetic_expression_old(Sheet* sheet, const char* expr, ErrorType* error) {
-    const char* p = expr;
-    double result = parse_arithmetic_expression(sheet, &p, error);
-    
-    // Check for remaining characters
-    skip_whitespace(&p);
-    if (*p != '\0') {
-        *error = ERROR_PARSE;
-        return 0.0;
-    }
-    
-    return result;
-}
-
-// Parse function calls like SUM(A1:A3), AVG(B1:B5), IF(A1>0,B1,C1)
-double parse_function(Sheet* sheet, const char** expr, ErrorType* error) {
-    skip_whitespace(expr);
-    
-    // Extract function name
-    const char* start = *expr;
-    char func_name[32];
-    int i = 0;
-    
-    while (**expr && isalpha(**expr) && i < 31) {
-        func_name[i++] = toupper(**expr);
-        (*expr)++;
-    }
-    func_name[i] = '\0';
-    
-    skip_whitespace(expr);
-    if (**expr != '(') {
-        *error = ERROR_PARSE;
-        return 0.0;
-    }
-    (*expr)++; // Skip '('
-    
-    double values[1000];  // Max 1000 values in a range
-    int value_count = 0;
-    
-    // Handle different functions
-    if (strcmp(func_name, "SUM") == 0 || strcmp(func_name, "AVG") == 0 || 
-        strcmp(func_name, "MAX") == 0 || strcmp(func_name, "MIN") == 0 ||
-        strcmp(func_name, "MEDIAN") == 0 || strcmp(func_name, "MODE") == 0) {
-        
-        // Parse range or single values
-        skip_whitespace(expr);
-        const char* arg_start = *expr;
-        
-        // Find the end of the argument (look for closing parenthesis)
-        int paren_count = 1;
-        const char* arg_end = *expr;
-        while (*arg_end && paren_count > 0) {
-            if (*arg_end == '(') paren_count++;
-            else if (*arg_end == ')') paren_count--;
-            if (paren_count > 0) arg_end++;
-        }
-        
-        // Extract the argument
-        int arg_len = (int)(arg_end - arg_start);
-        char arg[256];
-        if (arg_len >= sizeof(arg)) {
-            *error = ERROR_PARSE;
-            return 0.0;
-        }
-        
-        strncpy_s(arg, sizeof(arg), arg_start, arg_len);
-        arg[arg_len] = '\0';
-        
-        // Check if it's a range (contains ':')
-        if (strchr(arg, ':')) {
-            CellRange range;
-            if (parse_range(arg, &range)) {
-                value_count = get_range_values(sheet, &range, values, 1000);
-            } else {
-                *error = ERROR_PARSE;
-                return 0.0;
-            }
-        } else {
-            // Single cell reference or value
-            int row, col;
-            if (parse_cell_reference(arg, &row, &col)) {
-                Cell* cell = sheet_get_cell(sheet, row, col);
-                if (cell) {
-                    switch (cell->type) {
+    for (int i = 0; i < sheet->range_clipboard.rows; i++) {
+        for (int j = 0; j < sheet->range_clipboard.cols; j++) {
+            int dest_row = start_row + i;
+            int dest_col = start_col + j;
+            
+            if (dest_row >= sheet->rows || dest_col >= sheet->cols) continue;
+            
+            Cell* src_cell = sheet->range_clipboard.cells[i][j];
+            if (src_cell) {
+                Cell* dest_cell = sheet_get_or_create_cell(sheet, dest_row, dest_col);
+                if (dest_cell) {
+                    switch (src_cell->type) {
                         case CELL_NUMBER:
-                            values[0] = cell->data.number;
-                            value_count = 1;
+                            cell_set_number(dest_cell, src_cell->data.number);
+                            break;
+                        case CELL_STRING:
+                            cell_set_string(dest_cell, src_cell->data.string);
                             break;
                         case CELL_FORMULA:
-                            if (cell->data.formula.error == ERROR_NONE) {
-                                values[0] = cell->data.formula.cached_value;
-                                value_count = 1;
-                            }
-                            break;
-                        case CELL_EMPTY:
-                            values[0] = 0.0;
-                            value_count = 1;
+                            cell_set_formula(dest_cell, src_cell->data.formula.expression);
                             break;
                         default:
-                            *error = ERROR_VALUE;
-                            return 0.0;
+                            cell_clear(dest_cell);
+                            break;
                     }
-                } else {
-                    values[0] = 0.0;
-                    value_count = 1;
+                    // Copy display and formatting properties
+                    dest_cell->width = src_cell->width;
+                    dest_cell->precision = src_cell->precision;
+                    dest_cell->align = src_cell->align;
+                    dest_cell->format = src_cell->format;
+                    dest_cell->format_style = src_cell->format_style;
                 }
             } else {
-                // Try to parse as number
-                char* endptr;
-                double val = strtod(arg, &endptr);
-                if (*endptr == '\0') {
-                    values[0] = val;
-                    value_count = 1;
-                } else {
-                    *error = ERROR_PARSE;
-                    return 0.0;
-                }
+                sheet_clear_cell(sheet, dest_row, dest_col);
             }
         }
-        
-        *expr = arg_end + 1; // Skip closing ')'
-        
-        // Call appropriate function
-        if (strcmp(func_name, "SUM") == 0) {
-            return func_sum(values, value_count);
-        } else if (strcmp(func_name, "AVG") == 0) {
-            return func_avg(values, value_count);
-        } else if (strcmp(func_name, "MAX") == 0) {
-            return func_max(values, value_count);
-        } else if (strcmp(func_name, "MIN") == 0) {
-            return func_min(values, value_count);
-        } else if (strcmp(func_name, "MEDIAN") == 0) {
-            return func_median(values, value_count);        } else if (strcmp(func_name, "MODE") == 0) {
-            return func_mode(values, value_count);
-        }
-        
-    } else if (strcmp(func_name, "POWER") == 0) {
-        // POWER function: POWER(base, exponent)
-        skip_whitespace(expr);
-        
-        // Parse first argument (base)
-        double base = parse_arithmetic_expression(sheet, expr, error);
-        if (*error != ERROR_NONE) return 0.0;
-        
-        skip_whitespace(expr);
-        if (**expr != ',') {
-            *error = ERROR_PARSE;
-            return 0.0;
-        }
-        (*expr)++; // Skip comma
-        
-        // Parse second argument (exponent)  
-        double exponent = parse_arithmetic_expression(sheet, expr, error);
-        if (*error != ERROR_NONE) return 0.0;
-        
-        skip_whitespace(expr);
-        if (**expr != ')') {
-            *error = ERROR_PARSE;
-            return 0.0;
-        }
-        (*expr)++; // Skip closing parenthesis
-        
-        return func_power(base, exponent);      } else if (strcmp(func_name, "IF") == 0) {
-        // IF function: IF(condition, true_value, false_value)
-        // Enhanced to support string literals and string comparisons
-        skip_whitespace(expr);
-        
-        // Extract the entire condition expression more carefully
-        const char* condition_start = *expr;
-        int paren_count = 0;
-        const char* condition_end = *expr;
-        
-        // Find the comma that separates condition from true_value
-        while (*condition_end && (paren_count > 0 || *condition_end != ',')) {
-            if (*condition_end == '(') paren_count++;
-            else if (*condition_end == ')') paren_count--;
-            condition_end++;
-        }
-        
-        if (*condition_end != ',') {
-            *error = ERROR_PARSE;
-            return 0.0;
-        }
-        
-        // Extract condition string
-        int condition_len = (int)(condition_end - condition_start);
-        char condition_expr[256];
-        if (condition_len >= sizeof(condition_expr)) {
-            *error = ERROR_PARSE;
-            return 0.0;
-        }
-        
-        strncpy_s(condition_expr, sizeof(condition_expr), condition_start, condition_len);
-        condition_expr[condition_len] = '\0';
-        
-        // Evaluate the condition
-        double condition = evaluate_comparison(sheet, condition_expr, error);
-        if (*error != ERROR_NONE) return 0.0;
-        
-        // Move past the comma
-        *expr = condition_end + 1;
-        
-        // Enhanced parsing for true value (can be string or number)
-        skip_whitespace(expr);
-        double true_val = 0.0;
-        char true_str[256] = {0};
-        int is_true_string = 0;
-        
-        if (**expr == '"') {
-            // Parse string literal
-            (*expr)++; // Skip opening quote
-            int i = 0;
-            while (**expr && **expr != '"' && i < 255) {
-                true_str[i++] = **expr;
-                (*expr)++;
-            }
-            if (**expr == '"') {
-                (*expr)++; // Skip closing quote
-                is_true_string = 1;
-            } else {
-                *error = ERROR_PARSE;
-                return 0.0;
-            }
-        } else {
-            // Parse as numeric expression
-            true_val = parse_arithmetic_expression(sheet, expr, error);
-            if (*error != ERROR_NONE) return 0.0;
-        }
-        
-        skip_whitespace(expr);
-        if (**expr != ',') {
-            *error = ERROR_PARSE;
-            return 0.0;
-        }
-        (*expr)++; // Skip comma
-        
-        // Enhanced parsing for false value (can be string or number)
-        skip_whitespace(expr);
-        double false_val = 0.0;
-        char false_str[256] = {0};
-        int is_false_string = 0;
-        
-        if (**expr == '"') {
-            // Parse string literal
-            (*expr)++; // Skip opening quote
-            int i = 0;
-            while (**expr && **expr != '"' && i < 255) {
-                false_str[i++] = **expr;
-                (*expr)++;
-            }
-            if (**expr == '"') {
-                (*expr)++; // Skip closing quote
-                is_false_string = 1;
-            } else {
-                *error = ERROR_PARSE;
-                return 0.0;
-            }
-        } else {
-            // Parse as numeric expression
-            false_val = parse_arithmetic_expression(sheet, expr, error);
-            if (*error != ERROR_NONE) return 0.0;
-        }
-        
-        skip_whitespace(expr);
-        if (**expr != ')') {
-            *error = ERROR_PARSE;
-            return 0.0;
-        }
-        (*expr)++; // Skip closing parenthesis
-        
-        // Handle the IF logic with string support
-        return func_if_enhanced(condition, true_val, false_val, 
-                               is_true_string ? true_str : NULL,
-                               is_false_string ? false_str : NULL);
     }
     
-    *error = ERROR_PARSE;
+    sheet_recalculate(sheet);
+}
+
+// NEW: Cell formatting functions
+void cell_set_format(Cell* cell, DataFormat format, FormatStyle style) {
+    if (!cell) return;
+    
+    cell->format = format;
+    cell->format_style = style;
+}
+
+char* format_cell_value(Cell* cell) {
+    static char buffer[256];
+    
+    if (!cell || cell->type == CELL_EMPTY) {
+        return "";
+    }
+    
+    double value = 0.0;
+    char* string_value = NULL;
+    
+    // Get the value to format
+    switch (cell->type) {
+        case CELL_NUMBER:
+            value = cell->data.number;
+            break;
+        case CELL_FORMULA:
+            if (cell->data.formula.error != ERROR_NONE) {
+                switch (cell->data.formula.error) {
+                    case ERROR_DIV_ZERO: return "#DIV/0!";
+                    case ERROR_REF: return "#REF!";
+                    case ERROR_VALUE: return "#VALUE!";
+                    case ERROR_PARSE: return "#PARSE!";
+                    case ERROR_NA: return "#N/A!";
+                    default: return "#ERROR!";
+                }
+            }
+            if (cell->data.formula.is_string_result && cell->data.formula.cached_string) {
+                return cell->data.formula.cached_string;
+            }
+            value = cell->data.formula.cached_value;
+            break;
+        case CELL_STRING:
+            return cell->data.string;
+        default:
+            return "";
+    }
+    
+    // Apply formatting based on format type
+    switch (cell->format) {
+        case FORMAT_PERCENTAGE:
+            return format_number_as_percentage(value, cell->precision);
+            
+        case FORMAT_CURRENCY:
+            return format_number_as_currency(value);
+            
+        case FORMAT_DATE:
+            return format_number_as_date(value, cell->format_style);
+            
+        case FORMAT_TIME:
+            return format_number_as_time(value, cell->format_style);
+              case FORMAT_DATETIME:
+            // Check if it's one of the enhanced datetime styles
+            if (cell->format_style == DATETIME_STYLE_SHORT || 
+                cell->format_style == DATETIME_STYLE_LONG || 
+                cell->format_style == DATETIME_STYLE_ISO) {
+                return format_number_as_enhanced_datetime(value, cell->format_style);
+            } else {
+                return format_number_as_datetime(value, DATE_STYLE_MM_DD_YYYY, TIME_STYLE_12HR);
+            }
+            
+        case FORMAT_NUMBER:
+        case FORMAT_GENERAL:
+        default:
+            // Standard number formatting
+            snprintf(buffer, sizeof(buffer), "%.*f", cell->precision, value);
+            // Remove trailing zeros
+            char* dot = strchr(buffer, '.');
+            if (dot) {
+                char* end = buffer + strlen(buffer) - 1;
+                while (end > dot && *end == '0') *end-- = '\0';
+                if (*end == '.') *end = '\0';
+            }
+            return buffer;
+    }
+}
+
+char* format_number_as_percentage(double value, int precision) {
+    static char buffer[64];
+    snprintf(buffer, sizeof(buffer), "%.*f%%", precision, value * 100.0);
+    return buffer;
+}
+
+char* format_number_as_currency(double value) {
+    static char buffer[64];
+    if (value < 0) {
+        snprintf(buffer, sizeof(buffer), "-$%.2f", -value);
+    } else {
+        snprintf(buffer, sizeof(buffer), "$%.2f", value);
+    }
+    return buffer;
+}
+
+char* format_number_as_date(double value, FormatStyle style) {
+    static char buffer[64];
+    
+    // Convert Excel serial date to time_t (days since 1900-01-01)
+    // Excel incorrectly treats 1900 as a leap year, so we need adjustment
+    time_t base_time = (time_t)-2209161600LL;  // 1900-01-01 00:00:00 UTC (adjusted)
+    time_t date_time = base_time + (time_t)(value * 86400); // 86400 seconds per day
+    
+    struct tm date_struct;
+    if (gmtime_s(&date_struct, &date_time) != 0) {
+        strcpy_s(buffer, sizeof(buffer), "#DATE!");
+        return buffer;
+    }
+    
+    switch (style) {
+        case DATE_STYLE_MM_DD_YYYY:
+            strftime(buffer, sizeof(buffer), "%m/%d/%Y", &date_struct);
+            break;
+        case DATE_STYLE_DD_MM_YYYY:
+            strftime(buffer, sizeof(buffer), "%d/%m/%Y", &date_struct);
+            break;
+        case DATE_STYLE_YYYY_MM_DD:
+            strftime(buffer, sizeof(buffer), "%Y-%m-%d", &date_struct);
+            break;
+        case DATE_STYLE_MON_DD_YYYY:
+            strftime(buffer, sizeof(buffer), "%b %d, %Y", &date_struct);
+            break;
+        case DATE_STYLE_DD_MON_YYYY:
+            strftime(buffer, sizeof(buffer), "%d %b %Y", &date_struct);
+            break;
+        case DATE_STYLE_YYYY_MON_DD:
+            strftime(buffer, sizeof(buffer), "%Y %b %d", &date_struct);
+            break;
+        case DATE_STYLE_SHORT_DATE:
+            strftime(buffer, sizeof(buffer), "%m/%d/%y", &date_struct);
+            break;
+        default:
+            strftime(buffer, sizeof(buffer), "%Y-%m-%d", &date_struct);
+            break;
+    }
+    
+    return buffer;
+}
+
+char* format_number_as_time(double value, FormatStyle style) {
+    static char buffer[64];
+    
+    // Extract time portion (fractional part of the day)
+    double time_fraction = value - floor(value);
+    if (time_fraction < 0) time_fraction += 1.0;
+    
+    int total_seconds = (int)(time_fraction * 86400);
+    int hours = total_seconds / 3600;
+    int minutes = (total_seconds % 3600) / 60;
+    int seconds = total_seconds % 60;
+    
+    switch (style) {
+        case TIME_STYLE_12HR:
+            {
+                int display_hours = hours;
+                const char* am_pm = "AM";
+                if (hours == 0) {
+                    display_hours = 12;
+                } else if (hours == 12) {
+                    am_pm = "PM";
+                } else if (hours > 12) {
+                    display_hours = hours - 12;
+                    am_pm = "PM";
+                }
+                snprintf(buffer, sizeof(buffer), "%d:%02d %s", display_hours, minutes, am_pm);
+            }
+            break;
+        case TIME_STYLE_12HR_SECONDS:
+            {
+                int display_hours = hours;
+                const char* am_pm = "AM";
+                if (hours == 0) {
+                    display_hours = 12;
+                } else if (hours == 12) {
+                    am_pm = "PM";
+                } else if (hours > 12) {
+                    display_hours = hours - 12;
+                    am_pm = "PM";
+                }
+                snprintf(buffer, sizeof(buffer), "%d:%02d:%02d %s", display_hours, minutes, seconds, am_pm);
+            }
+            break;
+        case TIME_STYLE_SECONDS:
+            snprintf(buffer, sizeof(buffer), "%02d:%02d:%02d", hours, minutes, seconds);
+            break;
+        case TIME_STYLE_24HR:
+        default:
+            snprintf(buffer, sizeof(buffer), "%02d:%02d", hours, minutes);
+            break;
+    }
+    
+    return buffer;
+}
+
+char* format_number_as_datetime(double value, FormatStyle date_style, FormatStyle time_style) {
+    static char buffer[128];
+    char* date_part = format_number_as_date(value, date_style);
+    char* time_part = format_number_as_time(value, time_style);
+    snprintf(buffer, sizeof(buffer), "%s %s", date_part, time_part);
+    return buffer;
+}
+
+// NEW: Enhanced datetime formatting for special styles
+char* format_number_as_enhanced_datetime(double value, FormatStyle style) {
+    static char buffer[128];
+    
+    // Convert Excel serial date to time_t
+    time_t base_time = (time_t)-2209161600LL;  // 1900-01-01 00:00:00 UTC (adjusted)
+    time_t date_time = base_time + (time_t)(value * 86400);
+    
+    struct tm date_struct;
+    if (gmtime_s(&date_struct, &date_time) != 0) {
+        strcpy_s(buffer, sizeof(buffer), "#DATE!");
+        return buffer;
+    }
+    
+    // Extract time portion for time components
+    double time_fraction = value - floor(value);
+    if (time_fraction < 0) time_fraction += 1.0;
+    int total_seconds = (int)(time_fraction * 86400);
+    int hours = total_seconds / 3600;
+    int minutes = (total_seconds % 3600) / 60;
+    int seconds = total_seconds % 60;
+    
+    switch (style) {
+        case DATETIME_STYLE_SHORT:
+            {
+                int display_hours = hours;
+                const char* am_pm = "AM";
+                if (hours == 0) {
+                    display_hours = 12;
+                } else if (hours == 12) {
+                    am_pm = "PM";
+                } else if (hours > 12) {
+                    display_hours = hours - 12;
+                    am_pm = "PM";
+                }
+                snprintf(buffer, sizeof(buffer), "%d/%d/%02d %d:%02d %s", 
+                        date_struct.tm_mon + 1, date_struct.tm_mday, date_struct.tm_year % 100,
+                        display_hours, minutes, am_pm);
+            }
+            break;
+        case DATETIME_STYLE_LONG:
+            {
+                int display_hours = hours;
+                const char* am_pm = "AM";
+                if (hours == 0) {
+                    display_hours = 12;
+                } else if (hours == 12) {
+                    am_pm = "PM";
+                } else if (hours > 12) {
+                    display_hours = hours - 12;
+                    am_pm = "PM";
+                }
+                strftime(buffer, 80, "%b %d, %Y ", &date_struct);
+                char time_buf[48];
+                snprintf(time_buf, sizeof(time_buf), "%d:%02d:%02d %s", 
+                        display_hours, minutes, seconds, am_pm);
+                strcat_s(buffer, sizeof(buffer), time_buf);
+            }
+            break;
+        case DATETIME_STYLE_ISO:
+            snprintf(buffer, sizeof(buffer), "%04d-%02d-%02dT%02d:%02d:%02d",
+                    date_struct.tm_year + 1900, date_struct.tm_mon + 1, date_struct.tm_mday,
+                    hours, minutes, seconds);
+            break;
+        default:
+            // Fall back to regular datetime formatting
+            return format_number_as_datetime(value, DATE_STYLE_MM_DD_YYYY, TIME_STYLE_12HR);
+    }
+    
+    return buffer;
+}
+
+// NEW: VLOOKUP function
+double func_vlookup(Sheet* sheet, double lookup_value, const char* lookup_str,
+                   const char* table_range, int col_index, int exact_match, ErrorType* error) {
+    *error = ERROR_NONE;
+    
+    // Parse the table range
+    CellRange range;
+    if (!parse_range(table_range, &range)) {
+        *error = ERROR_REF;
+        return 0.0;
+    }
+    
+    // Validate column index
+    if (col_index < 1 || col_index > (range.end_col - range.start_col + 1)) {
+        *error = ERROR_REF;
+        return 0.0;
+    }
+    
+    // Search through the first column of the range
+    for (int row = range.start_row; row <= range.end_row; row++) {
+        Cell* lookup_cell = sheet_get_cell(sheet, row, range.start_col);
+        if (!lookup_cell) continue;
+        
+        int match_found = 0;
+        
+        // Compare based on data type
+        if (lookup_str) {
+            // String lookup
+            if (lookup_cell->type == CELL_STRING) {
+                match_found = (strcmp(lookup_cell->data.string, lookup_str) == 0);
+            } else if (lookup_cell->type == CELL_FORMULA && 
+                      lookup_cell->data.formula.is_string_result && 
+                      lookup_cell->data.formula.cached_string) {
+                match_found = (strcmp(lookup_cell->data.formula.cached_string, lookup_str) == 0);
+            }
+        } else {
+            // Numeric lookup
+            double cell_value = 0.0;
+            if (lookup_cell->type == CELL_NUMBER) {
+                cell_value = lookup_cell->data.number;
+            } else if (lookup_cell->type == CELL_FORMULA && 
+                      lookup_cell->data.formula.error == ERROR_NONE) {
+                cell_value = lookup_cell->data.formula.cached_value;
+            } else {
+                continue; // Skip non-numeric cells
+            }
+            
+            if (exact_match) {
+                match_found = (fabs(cell_value - lookup_value) < 1e-10);
+            } else {
+                // Approximate match - find largest value <= lookup_value
+                match_found = (cell_value <= lookup_value);
+                // For approximate match, we should continue to find the best match
+                // This is a simplified implementation
+                if (match_found) {
+                    // Check if there's a better match later
+                    for (int next_row = row + 1; next_row <= range.end_row; next_row++) {
+                        Cell* next_cell = sheet_get_cell(sheet, next_row, range.start_col);
+                        if (next_cell) {
+                            double next_value = 0.0;
+                            if (next_cell->type == CELL_NUMBER) {
+                                next_value = next_cell->data.number;
+                            } else if (next_cell->type == CELL_FORMULA && 
+                                      next_cell->data.formula.error == ERROR_NONE) {
+                                next_value = next_cell->data.formula.cached_value;
+                            } else {
+                                continue;
+                            }
+                            
+                            if (next_value <= lookup_value && next_value > cell_value) {
+                                // Found a better match
+                                match_found = 0;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        if (match_found) {
+            // Found a match, return the value from the specified column
+            int result_col = range.start_col + col_index - 1;
+            Cell* result_cell = sheet_get_cell(sheet, row, result_col);
+            
+            if (!result_cell) {
+                return 0.0; // Empty cell
+            }
+            
+            switch (result_cell->type) {
+                case CELL_NUMBER:
+                    return result_cell->data.number;
+                case CELL_FORMULA:
+                    if (result_cell->data.formula.error == ERROR_NONE) {
+                        return result_cell->data.formula.cached_value;
+                    }
+                    break;
+                case CELL_EMPTY:
+                    return 0.0;
+                default:
+                    break;
+            }
+        }
+    }
+    
+    // No match found
+    *error = ERROR_NA;
     return 0.0;
 }
 
@@ -1331,6 +1542,132 @@ double evaluate_comparison(Sheet* sheet, const char* expr, ErrorType* error) {
     return left;
 }
 
+// Parse term (handles * and /)
+double parse_term(Sheet* sheet, const char** expr, ErrorType* error) {
+    double result = parse_factor(sheet, expr, error);
+    if (*error != ERROR_NONE) return 0.0;
+    
+    while (1) {
+        skip_whitespace(expr);
+        if (**expr == '*') {
+            (*expr)++;
+            double right = parse_factor(sheet, expr, error);
+            if (*error != ERROR_NONE) return 0.0;
+            result *= right;
+        } else if (**expr == '/') {
+            (*expr)++;
+            double right = parse_factor(sheet, expr, error);
+            if (*error != ERROR_NONE) return 0.0;
+            if (right == 0.0) {
+                *error = ERROR_DIV_ZERO;
+                return 0.0;
+            }
+            result /= right;
+        } else {
+            break;
+        }
+    }
+    
+    return result;
+}
+
+// Parse a factor (number, cell reference, or function call)
+double parse_factor(Sheet* sheet, const char** expr, ErrorType* error) {
+    skip_whitespace(expr);
+    
+    if (**expr == '(') {
+        (*expr)++; // Skip '('
+        double result = parse_arithmetic_expression(sheet, expr, error);
+        if (*error != ERROR_NONE) return 0.0;
+        
+        skip_whitespace(expr);
+        if (**expr != ')') {
+            *error = ERROR_PARSE;
+            return 0.0;
+        }
+        (*expr)++; // Skip ')'
+        
+        return result;
+    }
+    
+    // Check if this could be a function call (letters followed by '(')
+    const char* start = *expr;
+    const char* lookahead = *expr;
+    
+    // Look ahead to see if this is a function call
+    while (*lookahead && isalpha(*lookahead)) lookahead++;
+    skip_whitespace(&lookahead);
+    
+    if (*lookahead == '(') {
+        // This is a function call
+        return parse_function(sheet, expr, error);
+    }
+    
+    // Try to parse as cell reference or range
+    char ref_buf[32];
+    int i = 0;
+    
+    // Extract potential cell reference (letters followed by numbers, possibly with colon)
+    while (**expr && (isalpha(**expr) || isdigit(**expr) || **expr == ':') && i < 31) {
+        ref_buf[i++] = **expr;
+        (*expr)++;
+    }
+    ref_buf[i] = '\0';
+    
+    if (i > 0) {
+        // Check if it's a range (contains ':')
+        if (strchr(ref_buf, ':')) {
+            CellRange range;
+            if (parse_range(ref_buf, &range)) {
+                // For a range without a function, just return the sum
+                double values[1000];
+                int count = get_range_values(sheet, &range, values, 1000);
+                return func_sum(values, count);
+            } else {
+                *error = ERROR_PARSE;
+                return 0.0;
+            }
+        } else {
+            // Single cell reference
+            int row, col;
+            if (parse_cell_reference(ref_buf, &row, &col)) {
+                Cell* cell = sheet_get_cell(sheet, row, col);
+                if (!cell) {
+                    return 0.0; // Empty cell
+                }
+                
+                switch (cell->type) {
+                    case CELL_EMPTY:
+                        return 0.0;
+                    case CELL_NUMBER:
+                        return cell->data.number;
+                    case CELL_FORMULA:
+                        if (cell->data.formula.error != ERROR_NONE) {
+                            *error = cell->data.formula.error;
+                            return 0.0;
+                        }
+                        return cell->data.formula.cached_value;
+                    default:
+                        *error = ERROR_VALUE;
+                        return 0.0;
+                }
+            }
+        }
+    }
+    
+    // Reset and try to parse as number
+    *expr = start;
+    char* endptr;
+    double value = strtod(*expr, &endptr);
+    if (endptr != *expr) {
+        *expr = endptr;
+        return value;
+    }
+    
+    *error = ERROR_PARSE;
+    return 0.0;
+}
+
 // Enhanced arithmetic expression parser (with updated signature)
 double parse_arithmetic_expression(Sheet* sheet, const char** expr, ErrorType* error) {
     double result = parse_term(sheet, expr, error);
@@ -1395,9 +1732,7 @@ char* escape_csv_string(const char* str) {
             needs_escape = 1;
             quote_count++;
         }
-    }
-    
-    if (!needs_escape) {
+    }    if (!needs_escape) {
         // Return a copy of the original string
         char* result = malloc(strlen(str) + 1);
         if (result) {
@@ -1654,8 +1989,359 @@ void demo_spreadsheet() {
         }
         printf("\n");
     }
+      sheet_free(sheet);
+}
+
+// Enhanced parse_function to support VLOOKUP and other functions
+double parse_function(Sheet* sheet, const char** expr, ErrorType* error) {
+    skip_whitespace(expr);
     
-    sheet_free(sheet);
+    // Extract function name
+    const char* start = *expr;
+    char func_name[32];
+    int i = 0;
+    
+    while (**expr && isalpha(**expr) && i < 31) {
+        func_name[i++] = toupper(**expr);
+        (*expr)++;
+    }
+    func_name[i] = '\0';
+    
+    skip_whitespace(expr);
+    if (**expr != '(') {
+        *error = ERROR_PARSE;
+        return 0.0;
+    }
+    (*expr)++; // Skip '('
+    
+    // NEW: Handle VLOOKUP function
+    if (strcmp(func_name, "VLOOKUP") == 0) {
+        // VLOOKUP(lookup_value, table_array, col_index_num, [range_lookup])
+        skip_whitespace(expr);
+        
+        // Parse lookup value (can be number or string)
+        double lookup_value = 0.0;
+        char lookup_str[256] = {0};
+        int is_string_lookup = 0;
+        
+        if (**expr == '"') {
+            // Parse string literal
+            (*expr)++; // Skip opening quote
+            int j = 0;
+            while (**expr && **expr != '"' && j < 255) {
+                lookup_str[j++] = **expr;
+                (*expr)++;
+            }
+            if (**expr == '"') {
+                (*expr)++; // Skip closing quote
+                is_string_lookup = 1;
+            } else {
+                *error = ERROR_PARSE;
+                return 0.0;
+            }
+        } else {
+            // Parse as numeric expression
+            lookup_value = parse_arithmetic_expression(sheet, expr, error);
+            if (*error != ERROR_NONE) return 0.0;
+        }
+        
+        // Expect comma
+        skip_whitespace(expr);
+        if (**expr != ',') {
+            *error = ERROR_PARSE;
+            return 0.0;
+        }
+        (*expr)++;
+        
+        // Parse table range
+        skip_whitespace(expr);
+        const char* range_start = *expr;
+        char table_range[64];
+        int range_len = 0;
+        
+        while (**expr && **expr != ',' && range_len < 63) {
+            table_range[range_len++] = **expr;
+            (*expr)++;
+        }
+        table_range[range_len] = '\0';
+        
+        // Expect comma
+        skip_whitespace(expr);
+        if (**expr != ',') {
+            *error = ERROR_PARSE;
+            return 0.0;
+        }
+        (*expr)++;
+        
+        // Parse column index
+        skip_whitespace(expr);
+        double col_index_f = parse_arithmetic_expression(sheet, expr, error);
+        if (*error != ERROR_NONE) return 0.0;
+        int col_index = (int)col_index_f;
+        
+        // Parse optional range_lookup parameter (default is approximate match)
+        int exact_match = 0; // Default to approximate match
+        skip_whitespace(expr);
+        if (**expr == ',') {
+            (*expr)++;
+            skip_whitespace(expr);
+            double exact_f = parse_arithmetic_expression(sheet, expr, error);
+            if (*error != ERROR_NONE) return 0.0;
+            exact_match = (exact_f == 0.0) ? 0 : 1; // 0 = approximate, anything else = exact
+        }
+        
+        // Expect closing parenthesis
+        skip_whitespace(expr);
+        if (**expr != ')') {
+            *error = ERROR_PARSE;
+            return 0.0;
+        }
+        (*expr)++;
+        
+        // Call VLOOKUP function
+        return func_vlookup(sheet, lookup_value, is_string_lookup ? lookup_str : NULL,
+                           table_range, col_index, exact_match, error);
+    }
+    
+    // Handle other existing functions (simplified for basic functionality)
+    double values[1000];  // Max 1000 values in a range
+    int value_count = 0;
+    
+    if (strcmp(func_name, "SUM") == 0 || strcmp(func_name, "AVG") == 0 || 
+        strcmp(func_name, "MAX") == 0 || strcmp(func_name, "MIN") == 0 ||
+        strcmp(func_name, "MEDIAN") == 0 || strcmp(func_name, "MODE") == 0) {
+        
+        // Parse range or single values
+        skip_whitespace(expr);
+        const char* arg_start = *expr;
+        
+        // Find the end of the argument (look for closing parenthesis)
+        int paren_count = 1;
+        const char* arg_end = *expr;
+        while (*arg_end && paren_count > 0) {
+            if (*arg_end == '(') paren_count++;
+            else if (*arg_end == ')') paren_count--;
+            if (paren_count > 0) arg_end++;
+        }
+        
+        // Extract the argument
+        int arg_len = (int)(arg_end - arg_start);
+        char arg[256];
+        if (arg_len >= sizeof(arg)) {
+            *error = ERROR_PARSE;
+            return 0.0;
+        }
+        
+        strncpy_s(arg, sizeof(arg), arg_start, arg_len);
+        arg[arg_len] = '\0';
+        
+        // Check if it's a range (contains ':')
+        if (strchr(arg, ':')) {
+            CellRange range;
+            if (parse_range(arg, &range)) {
+                value_count = get_range_values(sheet, &range, values, 1000);
+            } else {
+                *error = ERROR_PARSE;
+                return 0.0;
+            }
+        } else {
+            // Single cell reference or value
+            int row, col;
+            if (parse_cell_reference(arg, &row, &col)) {
+                Cell* cell = sheet_get_cell(sheet, row, col);
+                if (cell) {
+                    switch (cell->type) {
+                        case CELL_NUMBER:
+                            values[0] = cell->data.number;
+                            value_count = 1;
+                            break;
+                        case CELL_FORMULA:
+                            if (cell->data.formula.error == ERROR_NONE) {
+                                values[0] = cell->data.formula.cached_value;
+                                value_count = 1;
+                            }
+                            break;
+                        case CELL_EMPTY:
+                            values[0] = 0.0;
+                            value_count = 1;
+                            break;
+                        default:
+                            *error = ERROR_VALUE;
+                            return 0.0;
+                    }
+                } else {
+                    values[0] = 0.0;
+                    value_count = 1;
+                }
+            } else {
+                // Try to parse as number
+                char* endptr;
+                double val = strtod(arg, &endptr);
+                if (*endptr == '\0') {
+                    values[0] = val;
+                    value_count = 1;
+                } else {
+                    *error = ERROR_PARSE;
+                    return 0.0;
+                }
+            }
+        }
+        
+        *expr = arg_end + 1; // Skip closing ')'
+        
+        // Call appropriate function
+        if (strcmp(func_name, "SUM") == 0) {
+            return func_sum(values, value_count);
+        } else if (strcmp(func_name, "AVG") == 0) {
+            return func_avg(values, value_count);
+        } else if (strcmp(func_name, "MAX") == 0) {
+            return func_max(values, value_count);
+        } else if (strcmp(func_name, "MIN") == 0) {
+            return func_min(values, value_count);
+        } else if (strcmp(func_name, "MEDIAN") == 0) {
+            return func_median(values, value_count);
+        } else if (strcmp(func_name, "MODE") == 0) {
+            return func_mode(values, value_count);
+        }
+        
+    } else if (strcmp(func_name, "POWER") == 0) {
+        // POWER function: POWER(base, exponent)
+        skip_whitespace(expr);
+        
+        // Parse first argument (base)
+        double base = parse_arithmetic_expression(sheet, expr, error);
+        if (*error != ERROR_NONE) return 0.0;
+        
+        skip_whitespace(expr);
+        if (**expr != ',') {
+            *error = ERROR_PARSE;
+            return 0.0;
+        }
+        (*expr)++; // Skip comma
+        
+        // Parse second argument (exponent)  
+        double exponent = parse_arithmetic_expression(sheet, expr, error);
+        if (*error != ERROR_NONE) return 0.0;
+        
+        skip_whitespace(expr);
+        if (**expr != ')') {
+            *error = ERROR_PARSE;
+            return 0.0;
+        }
+        (*expr)++; // Skip closing parenthesis
+        
+        return func_power(base, exponent);
+    }
+      *error = ERROR_PARSE;
+    return 0.0;
+}
+
+// NEW: Cell color formatting functions
+void cell_set_text_color(Cell* cell, int color) {
+    if (cell) {
+        cell->text_color = color;
+    }
+}
+
+void cell_set_background_color(Cell* cell, int color) {
+    if (cell) {
+        cell->background_color = color;
+    }
+}
+
+// Parse color name or hex value
+int parse_color(const char* color_str) {
+    if (!color_str) return -1;
+    
+    // Check for hex color (e.g., #FFFFFF)
+    if (color_str[0] == '#' && strlen(color_str) == 7) {
+        // For console applications, we'll map hex colors to the 16 console colors
+        // This is a simplified mapping - you could make it more sophisticated
+        unsigned int hex_value;
+        if (sscanf_s(color_str + 1, "%x", &hex_value) == 1) {
+            // Map hex to nearest console color (simplified)
+            int r = (hex_value >> 16) & 0xFF;
+            int g = (hex_value >> 8) & 0xFF;
+            int b = hex_value & 0xFF;
+            
+            // Simple mapping to 16 colors
+            if (r < 128 && g < 128 && b < 128) {
+                if (r < 64 && g < 64 && b < 64) return COLOR_BLACK;
+                if (b > r && b > g) return COLOR_BLUE;
+                if (g > r && g > b) return COLOR_GREEN;
+                if (r > g && r > b) return COLOR_RED;
+                if (r > 128 && g > 128) return COLOR_YELLOW;
+                if (r > 128 && b > 128) return COLOR_MAGENTA;
+                if (g > 128 && b > 128) return COLOR_CYAN;
+                return COLOR_WHITE;
+            } else {
+                // Bright colors
+                if (b > r && b > g) return COLOR_BLUE | COLOR_BRIGHT;
+                if (g > r && g > b) return COLOR_GREEN | COLOR_BRIGHT;
+                if (r > g && r > b) return COLOR_RED | COLOR_BRIGHT;
+                if (r > 200 && g > 200) return COLOR_YELLOW | COLOR_BRIGHT;
+                if (r > 200 && b > 200) return COLOR_MAGENTA | COLOR_BRIGHT;
+                if (g > 200 && b > 200) return COLOR_CYAN | COLOR_BRIGHT;
+                return COLOR_WHITE | COLOR_BRIGHT;
+            }
+        }
+        return -1; // Invalid hex
+    }
+    
+    // Check for color names
+    if (strcmp(color_str, "black") == 0) return COLOR_BLACK;
+    if (strcmp(color_str, "blue") == 0) return COLOR_BLUE;
+    if (strcmp(color_str, "green") == 0) return COLOR_GREEN;
+    if (strcmp(color_str, "cyan") == 0) return COLOR_CYAN;
+    if (strcmp(color_str, "red") == 0) return COLOR_RED;
+    if (strcmp(color_str, "magenta") == 0) return COLOR_MAGENTA;
+    if (strcmp(color_str, "yellow") == 0) return COLOR_YELLOW;
+    if (strcmp(color_str, "white") == 0) return COLOR_WHITE;
+    
+    return -1; // Unknown color
+}
+
+// NEW: Column/Row resizing functions
+void sheet_set_column_width(Sheet* sheet, int col, int width) {
+    if (!sheet || col < 0 || col >= sheet->cols || width < 1) return;
+    sheet->col_widths[col] = width;
+}
+
+void sheet_set_row_height(Sheet* sheet, int row, int height) {
+    if (!sheet || row < 0 || row >= sheet->rows || height < 1) return;
+    sheet->row_heights[row] = height;
+}
+
+int sheet_get_column_width(Sheet* sheet, int col) {
+    if (!sheet || col < 0 || col >= sheet->cols) return 10; // Default width
+    return sheet->col_widths[col];
+}
+
+int sheet_get_row_height(Sheet* sheet, int row) {
+    if (!sheet || row < 0 || row >= sheet->rows) return 1; // Default height
+    return sheet->row_heights[row];
+}
+
+void sheet_resize_columns_in_range(Sheet* sheet, int start_col, int end_col, int delta) {
+    if (!sheet || start_col < 0 || end_col >= sheet->cols || start_col > end_col) return;
+    
+    for (int col = start_col; col <= end_col; col++) {
+        int new_width = sheet->col_widths[col] + delta;
+        if (new_width < 1) new_width = 1; // Minimum width
+        if (new_width > 50) new_width = 50; // Maximum width
+        sheet->col_widths[col] = new_width;
+    }
+}
+
+void sheet_resize_rows_in_range(Sheet* sheet, int start_row, int end_row, int delta) {
+    if (!sheet || start_row < 0 || end_row >= sheet->rows || start_row > end_row) return;
+    
+    for (int row = start_row; row <= end_row; row++) {
+        int new_height = sheet->row_heights[row] + delta;
+        if (new_height < 1) new_height = 1; // Minimum height
+        if (new_height > 10) new_height = 10; // Maximum height
+        sheet->row_heights[row] = new_height;
+    }
 }
 
 #endif // SHEET_H
