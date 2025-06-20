@@ -73,6 +73,8 @@ A powerful, vi-style spreadsheet application that runs entirely in the Windows t
 - **Lookup**: `VLOOKUP(lookup_value, table_array, col_index, [exact_match])`
 - **Operators**: `+`, `-`, `*`, `/`, `>`, `<`, `>=`, `<=`, `=`, `<>`
 - **Cell ranges**: `A1:A10`, `B1:C5` for aggregate functions
+- **ASCII Charts** Generate line, bar, pie, and scatter charts directly in the terminal
+
 
 ### Advanced Features
 - **Copy/Paste**: Full cell copying with `Ctrl+C` and `Ctrl+V`
@@ -608,7 +610,6 @@ WinSpread provides comprehensive error handling with clear error messages:
 
 ## Future Enhancements
 
-- [ ] Undo/Redo support
 - [ ] Graph/chart generation and visualization support like how GNUPlot does it
 - [ ] Conditional formatting
 - [ ] Replace VLOOKUP with XLOOKUP

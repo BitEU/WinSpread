@@ -8,6 +8,7 @@
 #include "console.h"
 #include "sheet.h"
 #include "debug.h"
+#include "charts.h"
 
 // Application state
 typedef enum {
@@ -18,6 +19,84 @@ typedef enum {
     MODE_COMMAND,
     MODE_RANGE_SELECT  // NEW: Range selection mode
 } AppMode;
+
+// Undo/Redo system
+typedef enum {
+    UNDO_CELL_CHANGE,
+    UNDO_RANGE_CHANGE,
+    UNDO_CLEAR_CELL,
+    UNDO_FORMAT_CHANGE,
+    UNDO_RESIZE_COLUMN,
+    UNDO_RESIZE_ROW
+} UndoType;
+
+typedef struct {
+    int row, col;
+    CellType old_type;
+    CellType new_type;
+    union {
+        double number;
+        char* string;
+        struct {
+            char* expression;
+            double cached_value;
+            char* cached_string;
+            int is_string_result;
+            ErrorType error;
+        } formula;
+    } old_data;
+    union {
+        double number;
+        char* string;
+        struct {
+            char* expression;
+            double cached_value;
+            char* cached_string;
+            int is_string_result;
+            ErrorType error;
+        } formula;
+    } new_data;
+    // Formatting data
+    DataFormat old_format;
+    FormatStyle old_format_style;
+    DataFormat new_format;
+    FormatStyle new_format_style;
+    int old_text_color;
+    int old_background_color;
+    int new_text_color;
+    int new_background_color;
+} CellUndoData;
+
+typedef struct {
+    int start_row, start_col;
+    int end_row, end_col;
+    CellUndoData* cell_data;
+    int cell_count;
+} RangeUndoData;
+
+typedef struct {
+    int index;  // Column or row index
+    int old_size;
+    int new_size;
+} ResizeUndoData;
+
+typedef struct UndoAction {
+    UndoType type;
+    union {
+        CellUndoData cell;
+        RangeUndoData range;
+        ResizeUndoData resize;
+    } data;
+    char description[128];
+} UndoAction;
+
+#define MAX_UNDO_ACTIONS 100
+
+typedef struct {
+    UndoAction actions[MAX_UNDO_ACTIONS];
+    int current_index;  // Points to the next action to be added
+    int count;          // Number of actions in the buffer
+} UndoBuffer;
 
 typedef struct {
     Sheet* sheet;
@@ -41,6 +120,9 @@ typedef struct {
     BOOL range_selection_active;
     int range_start_row;
     int range_start_col;
+    
+    // NEW: Undo/Redo system
+    UndoBuffer undo_buffer;
 } AppState;
 
 // Function prototypes
@@ -53,6 +135,7 @@ void app_start_input(AppState* state, AppMode mode);
 void app_finish_input(AppState* state);
 void app_cancel_input(AppState* state);
 void app_update_cursor_blink(AppState* state);
+void app_show_chart(AppState* state, ChartType type, const char* x_label, const char* y_label);
 
 // NEW: Range selection functions
 void app_start_range_selection(AppState* state);
@@ -70,10 +153,25 @@ void app_paste_from_system_clipboard(AppState* state);
 void app_copy_range(AppState* state);
 void app_paste_range(AppState* state);
 
+// NEW: Chart display function
+void display_chart_popup(Console* console, Chart* chart, const char* title);
+
 // NEW: Formatting functions
 void app_set_cell_format(AppState* state, DataFormat format, FormatStyle style);
 void app_cycle_date_format(AppState* state);
 void app_cycle_datetime_format(AppState* state);
+
+// NEW: Undo/Redo system functions
+void undo_buffer_init(UndoBuffer* buffer);
+void undo_buffer_cleanup(UndoBuffer* buffer);
+void undo_save_cell_state(AppState* state, int row, int col, const char* description);
+void undo_save_range_state(AppState* state, int start_row, int start_col, int end_row, int end_col, const char* description);
+void undo_save_resize_state(AppState* state, int index, int old_size, int new_size, UndoType type, const char* description);
+void undo_perform(AppState* state);
+void redo_perform(AppState* state);
+void undo_copy_cell_data(Cell* src, CellUndoData* dest);
+void undo_restore_cell_data(AppState* state, CellUndoData* src, int row, int col);
+void undo_free_cell_data(CellUndoData* data);
 
 // System clipboard functions
 BOOL set_system_clipboard_text(const char* text);
@@ -99,8 +197,7 @@ void app_init(AppState* state) {
         state->running = FALSE;
         return;
     }
-    
-    state->mode = MODE_NORMAL;
+      state->mode = MODE_NORMAL;
     state->cursor_row = 0;
     state->cursor_col = 0;
     state->view_top = 0;
@@ -114,6 +211,9 @@ void app_init(AppState* state) {
     state->range_selection_active = FALSE;
     state->range_start_row = 0;
     state->range_start_col = 0;
+    
+    // NEW: Initialize undo buffer
+    undo_buffer_init(&state->undo_buffer);
     
     state->cursor_blink_time = GetTickCount();
     state->cursor_visible = TRUE;
@@ -186,12 +286,46 @@ void app_init(AppState* state) {
     
     sheet_set_string(state->sheet, 38, 0, "Colors: black, blue, green, cyan");
     sheet_set_string(state->sheet, 39, 0, "        red, magenta, yellow, white");
+
+    // Chart commands help
+    sheet_set_string(state->sheet, 42, 0, "Chart Commands:");
+    sheet_set_string(state->sheet, 43, 0, ":line [x_label] [y_label]");
+    sheet_set_string(state->sheet, 44, 0, ":bar [x_label] [y_label]");
+    sheet_set_string(state->sheet, 45, 0, ":pie (for pie charts)");
+    sheet_set_string(state->sheet, 46, 0, ":scatter [x_label] [y_label]");
+    
+    // Sample data for charts
+    sheet_set_string(state->sheet, 48, 0, "Chart Example Data:");
+    sheet_set_string(state->sheet, 49, 0, "Month");
+    sheet_set_string(state->sheet, 49, 1, "Sales");
+    sheet_set_string(state->sheet, 49, 2, "Costs");
+    
+    sheet_set_string(state->sheet, 50, 0, "Jan");
+    sheet_set_number(state->sheet, 50, 1, 1200);
+    sheet_set_number(state->sheet, 50, 2, 800);
+    
+    sheet_set_string(state->sheet, 51, 0, "Feb");
+    sheet_set_number(state->sheet, 51, 1, 1500);
+    sheet_set_number(state->sheet, 51, 2, 900);
+    
+    sheet_set_string(state->sheet, 52, 0, "Mar");
+    sheet_set_number(state->sheet, 52, 1, 1800);
+    sheet_set_number(state->sheet, 52, 2, 1000);
+    
+    sheet_set_string(state->sheet, 53, 0, "Apr");
+    sheet_set_number(state->sheet, 53, 1, 2100);
+    sheet_set_number(state->sheet, 53, 2, 1100);
+    
+    sheet_set_string(state->sheet, 55, 0, "Try: Select A49:C53, then :line Month Revenue");
     
     sheet_recalculate(state->sheet);
     debug_log("app_init completed successfully");
 }
 
 void app_cleanup(AppState* state) {
+    // NEW: Cleanup undo buffer
+    undo_buffer_cleanup(&state->undo_buffer);
+    
     if (state->sheet) {
         sheet_free(state->sheet);
         state->sheet = NULL;
@@ -491,6 +625,30 @@ void app_start_input(AppState* state, AppMode mode) {
 }
 
 void app_finish_input(AppState* state) {
+    // Save undo state before making changes
+    const char* action_desc;
+    switch (state->mode) {
+        case MODE_INSERT_NUMBER:
+            action_desc = "Enter number";
+            break;
+        case MODE_INSERT_FORMULA:
+            action_desc = "Enter formula";
+            break;
+        case MODE_INSERT_STRING:
+            action_desc = "Enter text";
+            break;
+        case MODE_COMMAND:
+            action_desc = "Execute command";
+            break;
+        default:
+            action_desc = "Input";
+            break;
+    }
+    
+    if (state->mode != MODE_COMMAND) {
+        undo_save_cell_state(state, state->cursor_row, state->cursor_col, action_desc);
+    }
+    
     switch (state->mode) {
         case MODE_INSERT_NUMBER:
         case MODE_INSERT_FORMULA:
@@ -537,6 +695,8 @@ void app_cancel_input(AppState* state) {
 
 // NEW: Set cell formatting
 void app_set_cell_format(AppState* state, DataFormat format, FormatStyle style) {
+    undo_save_cell_state(state, state->cursor_row, state->cursor_col, "Format cell");
+    
     Cell* cell = sheet_get_or_create_cell(state->sheet, state->cursor_row, state->cursor_col);
     if (cell) {
         cell_set_format(cell, format, style);
@@ -569,6 +729,8 @@ void app_set_cell_format(AppState* state, DataFormat format, FormatStyle style) 
 
 // NEW: Enhanced function to cycle through comprehensive date/time formats
 void app_cycle_datetime_format(AppState* state) {
+    undo_save_cell_state(state, state->cursor_row, state->cursor_col, "Cycle datetime format");
+    
     Cell* cell = sheet_get_or_create_cell(state->sheet, state->cursor_row, state->cursor_col);
     if (cell) {
         // Define the cycling order through different formats
@@ -624,6 +786,8 @@ void app_cycle_datetime_format(AppState* state) {
 
 // NEW: Function to cycle through date formats
 void app_cycle_date_format(AppState* state) {
+    undo_save_cell_state(state, state->cursor_row, state->cursor_col, "Cycle date format");
+    
     Cell* cell = sheet_get_or_create_cell(state->sheet, state->cursor_row, state->cursor_col);
     if (cell) {
         // Get current format style or start with first style
@@ -873,6 +1037,59 @@ void app_execute_command(AppState* state, const char* command) {
         }
     }
     // NEW: Color commands for background
+    // Chart commands
+    else if (strncmp(command, "line", 4) == 0) {
+        char x_label[64] = "X";
+        char y_label[64] = "Y";
+        
+        // Parse optional labels
+        const char* args = command + 4;
+        while (*args == ' ') args++;
+        
+        if (*args) {
+            sscanf_s(args, "%63s %63s", x_label, (unsigned)sizeof(x_label), 
+                     y_label, (unsigned)sizeof(y_label));
+        }
+        
+        app_show_chart(state, CHART_LINE, x_label, y_label);
+    }
+    else if (strncmp(command, "bar", 3) == 0) {
+        char x_label[64] = "X";
+        char y_label[64] = "Y";
+        
+        // Parse optional labels
+        const char* args = command + 3;
+        while (*args == ' ') args++;
+        
+        if (*args) {
+            sscanf_s(args, "%63s %63s", x_label, (unsigned)sizeof(x_label), 
+                     y_label, (unsigned)sizeof(y_label));
+        }
+        
+        app_show_chart(state, CHART_BAR, x_label, y_label);
+    }
+    else if (strcmp(command, "pie") == 0) {
+        app_show_chart(state, CHART_PIE, "Category", "Value");
+    }
+    else if (strncmp(command, "scatter", 7) == 0) {
+        char x_label[64] = "X";
+        char y_label[64] = "Y";
+        
+        // Parse optional labels
+        const char* args = command + 7;
+        while (*args == ' ') args++;
+        
+        if (*args) {
+            sscanf_s(args, "%63s %63s", x_label, (unsigned)sizeof(x_label), 
+                     y_label, (unsigned)sizeof(y_label));
+        }
+        
+        app_show_chart(state, CHART_SCATTER, x_label, y_label);
+    }
+    else if (strcmp(command, "chart help") == 0 || strcmp(command, "help chart") == 0) {
+        strcpy_s(state->status_message, sizeof(state->status_message), 
+                "Charts: Select range with Shift+arrows, then :line/:bar/:pie/:scatter [x_label] [y_label]");
+    }
     else if (strncmp(command, "clrbg ", 6) == 0) {
         const char* color_str = command + 6;
         int color = parse_color(color_str);
@@ -927,6 +1144,7 @@ void app_copy_cell(AppState* state) {
 void app_paste_cell(AppState* state) {
     Cell* clipboard = sheet_get_clipboard_cell();
     if (clipboard) {
+        undo_save_cell_state(state, state->cursor_row, state->cursor_col, "Paste cell");
         sheet_copy_cell(state->sheet, clipboard->row, clipboard->col, 
                        state->cursor_row, state->cursor_col);
         strcpy_s(state->status_message, sizeof(state->status_message), "Cell pasted");
@@ -948,6 +1166,15 @@ void app_copy_range(AppState* state) {
 // NEW: Paste range from clipboard
 void app_paste_range(AppState* state) {
     if (state->sheet->range_clipboard.is_active) {
+        // Calculate the range that will be affected by the paste
+        int paste_rows = state->sheet->range_clipboard.rows;
+        int paste_cols = state->sheet->range_clipboard.cols;
+        int end_row = state->cursor_row + paste_rows - 1;
+        int end_col = state->cursor_col + paste_cols - 1;
+        
+        // Save undo state for the affected range
+        undo_save_range_state(state, state->cursor_row, state->cursor_col, end_row, end_col, "Paste range");
+        
         sheet_paste_range(state->sheet, state->cursor_row, state->cursor_col);
         strcpy_s(state->status_message, sizeof(state->status_message), "Range pasted");
     } else {
@@ -1129,8 +1356,8 @@ void app_handle_input(AppState* state, KeyEvent* key) {
                     break;
                 case ':':
                     app_start_input(state, MODE_COMMAND);
-                    break;
-                case 'x':
+                    break;                case 'x':
+                    undo_save_cell_state(state, state->cursor_row, state->cursor_col, "Clear cell");
                     sheet_clear_cell(state->sheet, state->cursor_row, state->cursor_col);
                     sheet_recalculate(state->sheet);
                     strcpy_s(state->status_message, sizeof(state->status_message), "Cell cleared");
@@ -1152,7 +1379,15 @@ void app_handle_input(AppState* state, KeyEvent* key) {
                     if (key->ctrl) {
                         state->running = FALSE;
                     }
-                    break;                // NEW: Date format cycling with Ctrl+#
+                    break;
+                // NEW: Undo/Redo support
+                case 'z':
+                    if (key->ctrl && key->shift) {
+                        redo_perform(state);
+                    } else if (key->ctrl) {
+                        undo_perform(state);
+                    }
+                    break;// NEW: Date format cycling with Ctrl+#
                 case '#':
                     if (key->ctrl) {
                         app_cycle_date_format(state);
@@ -1360,8 +1595,513 @@ void app_handle_input(AppState* state, KeyEvent* key) {
                     }
                     break;
             }
+        }    }
+}
+
+// NEW: Undo/Redo system implementation
+void undo_buffer_init(UndoBuffer* buffer) {
+    buffer->current_index = 0;
+    buffer->count = 0;
+    memset(buffer->actions, 0, sizeof(buffer->actions));
+}
+
+void undo_buffer_cleanup(UndoBuffer* buffer) {
+    for (int i = 0; i < buffer->count; i++) {
+        if (buffer->actions[i].type == UNDO_CELL_CHANGE) {
+            undo_free_cell_data(&buffer->actions[i].data.cell);
+        } else if (buffer->actions[i].type == UNDO_RANGE_CHANGE) {
+            if (buffer->actions[i].data.range.cell_data) {
+                for (int j = 0; j < buffer->actions[i].data.range.cell_count; j++) {
+                    undo_free_cell_data(&buffer->actions[i].data.range.cell_data[j]);
+                }
+                free(buffer->actions[i].data.range.cell_data);
+            }
         }
     }
+    buffer->current_index = 0;
+    buffer->count = 0;
+}
+
+void undo_free_cell_data(CellUndoData* data) {
+    if (data->old_type == CELL_STRING && data->old_data.string) {
+        free(data->old_data.string);
+        data->old_data.string = NULL;
+    }
+    if (data->old_type == CELL_FORMULA) {
+        if (data->old_data.formula.expression) {
+            free(data->old_data.formula.expression);
+            data->old_data.formula.expression = NULL;
+        }
+        if (data->old_data.formula.cached_string) {
+            free(data->old_data.formula.cached_string);
+            data->old_data.formula.cached_string = NULL;
+        }
+    }
+    if (data->new_type == CELL_STRING && data->new_data.string) {
+        free(data->new_data.string);
+        data->new_data.string = NULL;
+    }
+    if (data->new_type == CELL_FORMULA) {
+        if (data->new_data.formula.expression) {
+            free(data->new_data.formula.expression);
+            data->new_data.formula.expression = NULL;
+        }
+        if (data->new_data.formula.cached_string) {
+            free(data->new_data.formula.cached_string);
+            data->new_data.formula.cached_string = NULL;
+        }
+    }
+}
+
+void undo_copy_cell_data(Cell* src, CellUndoData* dest) {
+    if (!src) {
+        dest->old_type = CELL_EMPTY;
+        memset(&dest->old_data, 0, sizeof(dest->old_data));
+        dest->old_format = FORMAT_GENERAL;
+        dest->old_format_style = 0;
+        dest->old_text_color = -1;
+        dest->old_background_color = -1;
+        return;
+    }
+    
+    dest->old_type = src->type;
+    dest->old_format = src->format;
+    dest->old_format_style = src->format_style;
+    dest->old_text_color = src->text_color;
+    dest->old_background_color = src->background_color;
+    
+    switch (src->type) {
+        case CELL_EMPTY:
+            memset(&dest->old_data, 0, sizeof(dest->old_data));
+            break;
+        case CELL_NUMBER:
+            dest->old_data.number = src->data.number;
+            break;
+        case CELL_STRING:
+            if (src->data.string) {
+                dest->old_data.string = _strdup(src->data.string);
+            } else {
+                dest->old_data.string = NULL;
+            }
+            break;
+        case CELL_FORMULA:
+            if (src->data.formula.expression) {
+                dest->old_data.formula.expression = _strdup(src->data.formula.expression);
+            } else {
+                dest->old_data.formula.expression = NULL;
+            }
+            dest->old_data.formula.cached_value = src->data.formula.cached_value;
+            if (src->data.formula.cached_string) {
+                dest->old_data.formula.cached_string = _strdup(src->data.formula.cached_string);
+            } else {
+                dest->old_data.formula.cached_string = NULL;
+            }
+            dest->old_data.formula.is_string_result = src->data.formula.is_string_result;
+            dest->old_data.formula.error = src->data.formula.error;
+            break;
+        default:
+            memset(&dest->old_data, 0, sizeof(dest->old_data));
+            break;
+    }
+}
+
+void undo_save_cell_state(AppState* state, int row, int col, const char* description) {
+    UndoBuffer* buffer = &state->undo_buffer;
+    
+    // If we're not at the end of the buffer, we need to discard future actions
+    if (buffer->current_index < buffer->count) {
+        // Free memory for discarded actions
+        for (int i = buffer->current_index; i < buffer->count; i++) {
+            if (buffer->actions[i].type == UNDO_CELL_CHANGE) {
+                undo_free_cell_data(&buffer->actions[i].data.cell);
+            } else if (buffer->actions[i].type == UNDO_RANGE_CHANGE) {
+                if (buffer->actions[i].data.range.cell_data) {
+                    for (int j = 0; j < buffer->actions[i].data.range.cell_count; j++) {
+                        undo_free_cell_data(&buffer->actions[i].data.range.cell_data[j]);
+                    }
+                    free(buffer->actions[i].data.range.cell_data);
+                }
+            }
+        }
+        buffer->count = buffer->current_index;
+    }
+    
+    // Check if buffer is full
+    if (buffer->count >= MAX_UNDO_ACTIONS) {
+        // Free the oldest action
+        if (buffer->actions[0].type == UNDO_CELL_CHANGE) {
+            undo_free_cell_data(&buffer->actions[0].data.cell);
+        } else if (buffer->actions[0].type == UNDO_RANGE_CHANGE) {
+            if (buffer->actions[0].data.range.cell_data) {
+                for (int j = 0; j < buffer->actions[0].data.range.cell_count; j++) {
+                    undo_free_cell_data(&buffer->actions[0].data.range.cell_data[j]);
+                }
+                free(buffer->actions[0].data.range.cell_data);
+            }
+        }
+        // Shift all actions down
+        memmove(&buffer->actions[0], &buffer->actions[1], 
+                sizeof(UndoAction) * (MAX_UNDO_ACTIONS - 1));
+        buffer->count--;
+        buffer->current_index--;
+    }
+    
+    // Create new undo action
+    UndoAction* action = &buffer->actions[buffer->count];
+    action->type = UNDO_CELL_CHANGE;
+    action->data.cell.row = row;
+    action->data.cell.col = col;
+    
+    // Save current cell state
+    Cell* cell = sheet_get_cell(state->sheet, row, col);
+    undo_copy_cell_data(cell, &action->data.cell);
+    
+    // Copy description
+    strncpy_s(action->description, sizeof(action->description), description, _TRUNCATE);
+      buffer->count++;
+    buffer->current_index = buffer->count;
+}
+
+void undo_save_range_state(AppState* state, int start_row, int start_col, int end_row, int end_col, const char* description) {
+    UndoBuffer* buffer = &state->undo_buffer;
+    
+    // Calculate the number of cells in the range
+    int cell_count = (end_row - start_row + 1) * (end_col - start_col + 1);
+    
+    // If we're not at the end of the buffer, discard future actions
+    if (buffer->current_index < buffer->count) {
+        for (int i = buffer->current_index; i < buffer->count; i++) {
+            if (buffer->actions[i].type == UNDO_CELL_CHANGE) {
+                undo_free_cell_data(&buffer->actions[i].data.cell);
+            } else if (buffer->actions[i].type == UNDO_RANGE_CHANGE) {
+                if (buffer->actions[i].data.range.cell_data) {
+                    for (int j = 0; j < buffer->actions[i].data.range.cell_count; j++) {
+                        undo_free_cell_data(&buffer->actions[i].data.range.cell_data[j]);
+                    }
+                    free(buffer->actions[i].data.range.cell_data);
+                }
+            }
+        }
+        buffer->count = buffer->current_index;
+    }
+    
+    // Check if buffer is full
+    if (buffer->count >= MAX_UNDO_ACTIONS) {
+        if (buffer->actions[0].type == UNDO_CELL_CHANGE) {
+            undo_free_cell_data(&buffer->actions[0].data.cell);
+        } else if (buffer->actions[0].type == UNDO_RANGE_CHANGE) {
+            if (buffer->actions[0].data.range.cell_data) {
+                for (int j = 0; j < buffer->actions[0].data.range.cell_count; j++) {
+                    undo_free_cell_data(&buffer->actions[0].data.range.cell_data[j]);
+                }
+                free(buffer->actions[0].data.range.cell_data);
+            }
+        }
+        memmove(&buffer->actions[0], &buffer->actions[1], 
+                sizeof(UndoAction) * (MAX_UNDO_ACTIONS - 1));
+        buffer->count--;
+        buffer->current_index--;
+    }
+    
+    // Create new undo action
+    UndoAction* action = &buffer->actions[buffer->count];
+    action->type = UNDO_RANGE_CHANGE;
+    action->data.range.start_row = start_row;
+    action->data.range.start_col = start_col;
+    action->data.range.end_row = end_row;
+    action->data.range.end_col = end_col;
+    action->data.range.cell_count = cell_count;
+    
+    // Allocate memory for cell data
+    action->data.range.cell_data = (CellUndoData*)malloc(sizeof(CellUndoData) * cell_count);
+    if (!action->data.range.cell_data) {
+        return; // Failed to allocate memory
+    }
+    
+    // Save state for each cell in the range
+    int index = 0;
+    for (int row = start_row; row <= end_row; row++) {
+        for (int col = start_col; col <= end_col; col++) {
+            action->data.range.cell_data[index].row = row;
+            action->data.range.cell_data[index].col = col;
+            
+            Cell* cell = sheet_get_cell(state->sheet, row, col);
+            undo_copy_cell_data(cell, &action->data.range.cell_data[index]);
+            index++;
+        }
+    }
+    
+    // Copy description
+    strncpy_s(action->description, sizeof(action->description), description, _TRUNCATE);
+    
+    buffer->count++;
+    buffer->current_index = buffer->count;
+}
+
+void undo_restore_cell_data(AppState* state, CellUndoData* src, int row, int col) {
+    // Clear the current cell first
+    sheet_clear_cell(state->sheet, row, col);
+    
+    if (src->old_type == CELL_EMPTY) {
+        return;  // Cell should remain empty
+    }
+    
+    // Get or create cell
+    Cell* cell = sheet_get_or_create_cell(state->sheet, row, col);
+    if (!cell) return;
+    
+    // Restore cell data
+    switch (src->old_type) {
+        case CELL_NUMBER:
+            cell_set_number(cell, src->old_data.number);
+            break;
+        case CELL_STRING:
+            if (src->old_data.string) {
+                cell_set_string(cell, src->old_data.string);
+            }
+            break;
+        case CELL_FORMULA:
+            if (src->old_data.formula.expression) {
+                cell_set_formula(cell, src->old_data.formula.expression);
+            }
+            break;
+        default:
+            break;
+    }
+    
+    // Restore formatting
+    cell_set_format(cell, src->old_format, src->old_format_style);
+    cell_set_text_color(cell, src->old_text_color);
+    cell_set_background_color(cell, src->old_background_color);
+}
+
+void undo_perform(AppState* state) {
+    UndoBuffer* buffer = &state->undo_buffer;
+    
+    if (buffer->current_index == 0) {
+        strcpy_s(state->status_message, sizeof(state->status_message), "Nothing to undo");
+        return;
+    }
+    
+    buffer->current_index--;
+    UndoAction* action = &buffer->actions[buffer->current_index];
+    
+    switch (action->type) {
+        case UNDO_CELL_CHANGE:
+            // Save current state for redo before restoring old state
+            Cell* cell = sheet_get_cell(state->sheet, action->data.cell.row, action->data.cell.col);
+            
+            // Save current state as new state for potential redo
+            if (cell) {
+                action->data.cell.new_type = cell->type;
+                action->data.cell.new_format = cell->format;
+                action->data.cell.new_format_style = cell->format_style;
+                action->data.cell.new_text_color = cell->text_color;
+                action->data.cell.new_background_color = cell->background_color;
+                
+                switch (cell->type) {
+                    case CELL_NUMBER:
+                        action->data.cell.new_data.number = cell->data.number;
+                        break;
+                    case CELL_STRING:
+                        if (action->data.cell.new_data.string) {
+                            free(action->data.cell.new_data.string);
+                        }
+                        action->data.cell.new_data.string = cell->data.string ? _strdup(cell->data.string) : NULL;
+                        break;
+                    case CELL_FORMULA:
+                        if (action->data.cell.new_data.formula.expression) {
+                            free(action->data.cell.new_data.formula.expression);
+                        }
+                        if (action->data.cell.new_data.formula.cached_string) {
+                            free(action->data.cell.new_data.formula.cached_string);
+                        }
+                        action->data.cell.new_data.formula.expression = cell->data.formula.expression ? _strdup(cell->data.formula.expression) : NULL;
+                        action->data.cell.new_data.formula.cached_value = cell->data.formula.cached_value;
+                        action->data.cell.new_data.formula.cached_string = cell->data.formula.cached_string ? _strdup(cell->data.formula.cached_string) : NULL;
+                        action->data.cell.new_data.formula.is_string_result = cell->data.formula.is_string_result;
+                        action->data.cell.new_data.formula.error = cell->data.formula.error;
+                        break;
+                    default:
+                        memset(&action->data.cell.new_data, 0, sizeof(action->data.cell.new_data));
+                        break;
+                }
+            } else {
+                action->data.cell.new_type = CELL_EMPTY;
+                action->data.cell.new_format = FORMAT_GENERAL;
+                action->data.cell.new_format_style = 0;
+                action->data.cell.new_text_color = -1;
+                action->data.cell.new_background_color = -1;
+                memset(&action->data.cell.new_data, 0, sizeof(action->data.cell.new_data));
+            }
+            
+            // Restore the old state
+            undo_restore_cell_data(state, &action->data.cell, action->data.cell.row, action->data.cell.col);
+            break;
+            
+        case UNDO_RANGE_CHANGE:
+            // Similar logic for range changes - restore all cells in the range
+            for (int i = 0; i < action->data.range.cell_count; i++) {
+                CellUndoData* cell_data = &action->data.range.cell_data[i];
+                undo_restore_cell_data(state, cell_data, cell_data->row, cell_data->col);
+            }
+            break;
+            
+        case UNDO_RESIZE_COLUMN:
+            sheet_set_column_width(state->sheet, action->data.resize.index, action->data.resize.old_size);
+            break;
+            
+        case UNDO_RESIZE_ROW:
+            sheet_set_row_height(state->sheet, action->data.resize.index, action->data.resize.old_size);
+            break;
+            
+        default:
+            break;
+    }
+    
+    sheet_recalculate(state->sheet);
+    
+    char msg[256];
+    snprintf(msg, sizeof(msg), "Undid: %s", action->description);
+    strcpy_s(state->status_message, sizeof(state->status_message), msg);
+}
+
+void redo_perform(AppState* state) {
+    UndoBuffer* buffer = &state->undo_buffer;
+    
+    if (buffer->current_index >= buffer->count) {
+        strcpy_s(state->status_message, sizeof(state->status_message), "Nothing to redo");
+        return;
+    }
+    
+    UndoAction* action = &buffer->actions[buffer->current_index];
+    
+    switch (action->type) {
+        case UNDO_CELL_CHANGE:
+            // Clear the cell first
+            sheet_clear_cell(state->sheet, action->data.cell.row, action->data.cell.col);
+            
+            if (action->data.cell.new_type != CELL_EMPTY) {
+                // Get or create cell for redo
+                Cell* cell = sheet_get_or_create_cell(state->sheet, action->data.cell.row, action->data.cell.col);
+                if (cell) {
+                    // Restore the "new" state that was undone
+                    switch (action->data.cell.new_type) {
+                        case CELL_NUMBER:
+                            cell_set_number(cell, action->data.cell.new_data.number);
+                            break;
+                        case CELL_STRING:
+                            if (action->data.cell.new_data.string) {
+                                cell_set_string(cell, action->data.cell.new_data.string);
+                            }
+                            break;
+                        case CELL_FORMULA:
+                            if (action->data.cell.new_data.formula.expression) {
+                                cell_set_formula(cell, action->data.cell.new_data.formula.expression);
+                            }
+                            break;
+                        default:
+                            break;
+                    }
+                    
+                    // Restore formatting
+                    cell_set_format(cell, action->data.cell.new_format, action->data.cell.new_format_style);
+                    cell_set_text_color(cell, action->data.cell.new_text_color);
+                    cell_set_background_color(cell, action->data.cell.new_background_color);
+                }
+            }
+            break;
+            
+        case UNDO_RANGE_CHANGE:
+            // Restore new state for all cells in range
+            for (int i = 0; i < action->data.range.cell_count; i++) {
+                CellUndoData* cell_data = &action->data.range.cell_data[i];
+                // This would need similar logic as above for each cell
+                // For now, keeping it simple
+                undo_restore_cell_data(state, cell_data, cell_data->row, cell_data->col);
+            }
+            break;
+            
+        case UNDO_RESIZE_COLUMN:
+            sheet_set_column_width(state->sheet, action->data.resize.index, action->data.resize.new_size);
+            break;
+            
+        case UNDO_RESIZE_ROW:
+            sheet_set_row_height(state->sheet, action->data.resize.index, action->data.resize.new_size);
+            break;
+            
+        default:
+            break;
+    }
+    
+    buffer->current_index++;
+    sheet_recalculate(state->sheet);
+    
+    char msg[256];
+    snprintf(msg, sizeof(msg), "Redid: %s", action->description);
+    strcpy_s(state->status_message, sizeof(state->status_message), msg);
+}
+
+void app_show_chart(AppState* state, ChartType type, const char* x_label, const char* y_label) {
+    // Check if there's an active range selection
+    if (!state->sheet->selection.is_active) {
+        strcpy_s(state->status_message, sizeof(state->status_message), 
+                "Please select a data range first (use Shift+arrows)");
+        return;
+    }
+      // Create chart with console size, but leave room for legend and borders
+    int chart_width = state->console->width - 25;  // Leave more room for legend
+    int chart_height = state->console->height - 8; // Leave space for title and borders
+    
+    Chart* chart = chart_create_sized(type, x_label, y_label, chart_width, chart_height);
+    if (!chart) {
+        strcpy_s(state->status_message, sizeof(state->status_message), 
+                "Failed to create chart");
+        return;
+    }
+    
+    // Add data from selected range
+    if (!chart_add_data_from_range(chart, state->sheet, &state->sheet->selection)) {
+        chart_free(chart);
+        strcpy_s(state->status_message, sizeof(state->status_message), 
+                "Failed to add data to chart (need at least 2 columns)");
+        return;
+    }
+    
+    // Render the chart
+    chart_render(chart);
+    
+    // Create title for the chart
+    char title[128];
+    const char* type_name = "Chart";
+    switch (type) {
+        case CHART_LINE: type_name = "Line Chart"; break;
+        case CHART_BAR: type_name = "Bar Chart"; break;
+        case CHART_PIE: type_name = "Pie Chart"; break;
+        case CHART_SCATTER: type_name = "Scatter Plot"; break;
+    }
+    sprintf_s(title, sizeof(title), " %s ", type_name);
+    
+    // Display chart in popup
+    display_chart_popup(state->console, chart, title);
+    
+    // Wait for key press
+    KeyEvent key;
+    while (state->running) {
+        if (console_get_key(state->console, &key)) {
+            break;  // Any key closes the chart
+        }
+        Sleep(50);
+    }
+    
+    // Clean up
+    chart_free(chart);
+    
+    // Clear the range selection
+    sheet_clear_range_selection(state->sheet);
+    state->range_selection_active = FALSE;
+    
+    // Update status    strcpy_s(state->status_message, sizeof(state->status_message), "Chart closed");
 }
 
 // Main program
